@@ -1,0 +1,1 @@
+web: ./target/release/macro_dashboard_acm
