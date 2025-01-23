@@ -2,8 +2,10 @@ use warp::reply::Json;
 use warp::Rejection;
 use crate::services::treasury::fetch_tbill_data;
 use log::{info, error};
+use std::sync::Arc;
+use crate::services::db::DbStore;
 
-pub async fn get_tbill() -> Result<Json, Rejection> {
+pub async fn get_tbill(_db: Arc<DbStore>) -> Result<Json, Rejection> {
     info!("Handling request to get T-bill rate.");
 
     match fetch_tbill_data().await {

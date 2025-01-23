@@ -1,10 +1,13 @@
+// src/handlers/real_yield.rs
+use std::sync::Arc;
 use warp::reply::Json;
 use warp::Rejection;
 use crate::services::bls::fetch_inflation_data;
 use crate::services::treasury::fetch_tbill_data;
 use log::{info, error};
+use crate::services::db::DbStore;
 
-pub async fn get_real_yield() -> Result<Json, Rejection> {
+pub async fn get_real_yield(_db: Arc<DbStore>) -> Result<Json, Rejection> {
     info!("Handling request to calculate real yield.");
 
     let inflation = match fetch_inflation_data().await {

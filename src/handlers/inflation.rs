@@ -1,9 +1,12 @@
+// src/handlers/inflation.rs
 use warp::reply::Json;
 use warp::Rejection;
 use crate::services::bls::fetch_inflation_data;
 use log::{info, error};
+use std::sync::Arc;
+use crate::services::db::DbStore;
 
-pub async fn get_inflation() -> Result<Json, Rejection> {
+pub async fn get_inflation(_db: Arc<DbStore>) -> Result<Json, Rejection> {
     info!("Handling request to get inflation data.");
 
     match fetch_inflation_data().await {

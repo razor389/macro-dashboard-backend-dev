@@ -1,13 +1,19 @@
+use std::sync::Arc;
 use warp::Filter;
-use crate::handlers::{equity::get_equity_data, inflation::get_inflation, long_term::get_long_term_rates, real_yield::get_real_yield, tbill::get_tbill};
+use crate::handlers::{equity::get_equity_data, inflation::get_inflation, 
+                     long_term::get_long_term_rates, real_yield::get_real_yield, 
+                     tbill::get_tbill};
+use crate::services::db::DbStore;
 use log::info;
 
-pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+pub fn routes(db: Arc<DbStore>) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     info!("Configuring routes...");
 
-    // Define each route separately
+    let db_filter = warp::any().map(move || db.clone());
+
     let inflation_route = warp::path!("api" / "v1" / "inflation")
         .and(warp::get())
+        .and(db_filter.clone())
         .and_then(get_inflation)
         .map(|reply| {
             info!("Inflation route was hit.");
@@ -16,6 +22,7 @@ pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejecti
 
     let tbill_route = warp::path!("api" / "v1" / "tbill")
         .and(warp::get())
+        .and(db_filter.clone())
         .and_then(get_tbill)
         .map(|reply| {
             info!("T-bill route was hit.");
@@ -24,6 +31,7 @@ pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejecti
 
     let real_yield_route = warp::path!("api" / "v1" / "real_yield")
         .and(warp::get())
+        .and(db_filter.clone())
         .and_then(get_real_yield)
         .map(|reply| {
             info!("Real yield route was hit.");
@@ -32,6 +40,7 @@ pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejecti
 
     let long_term_route = warp::path!("api" / "v1" / "long_term_rates")
         .and(warp::get())
+        .and(db_filter.clone())
         .and_then(get_long_term_rates)
         .map(|reply| {
             info!("Long-term rates route was hit.");
@@ -40,14 +49,17 @@ pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejecti
 
     let equity_route = warp::path!("api" / "v1" / "equity")
         .and(warp::get())
+        .and(db_filter.clone())
         .and_then(get_equity_data)
         .map(|reply| {
             info!("Equity route was hit.");
             reply
         });
     
-    // Combine all routes
     info!("All routes configured successfully.");
-    inflation_route.or(tbill_route).or(real_yield_route).or(long_term_route).or(equity_route)
-
+    inflation_route
+        .or(tbill_route)
+        .or(real_yield_route)
+        .or(long_term_route)
+        .or(equity_route)
 }
