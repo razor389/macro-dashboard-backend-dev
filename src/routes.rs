@@ -1,5 +1,5 @@
 use warp::Filter;
-use crate::handlers::{inflation::get_inflation, long_term::get_long_term_rates, real_yield::get_real_yield, tbill::get_tbill};
+use crate::handlers::{equity::get_equity_data, inflation::get_inflation, long_term::get_long_term_rates, real_yield::get_real_yield, tbill::get_tbill};
 use log::info;
 
 pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -37,9 +37,17 @@ pub fn routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejecti
             info!("Long-term rates route was hit.");
             reply
         });
+
+    let equity_route = warp::path!("api" / "v1" / "equity")
+        .and(warp::get())
+        .and_then(get_equity_data)
+        .map(|reply| {
+            info!("Equity route was hit.");
+            reply
+        });
     
     // Combine all routes
     info!("All routes configured successfully.");
-    inflation_route.or(tbill_route).or(real_yield_route).or(long_term_route)
+    inflation_route.or(tbill_route).or(real_yield_route).or(long_term_route).or(equity_route)
 
 }
