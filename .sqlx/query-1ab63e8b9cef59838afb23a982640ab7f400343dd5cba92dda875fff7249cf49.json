@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT quarter, ttm_dividend, eps_actual, eps_estimated FROM quarterly_data",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "quarter",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "ttm_dividend",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 2,
+        "name": "eps_actual",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 3,
+        "name": "eps_estimated",
+        "type_info": "Numeric"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1ab63e8b9cef59838afb23a982640ab7f400343dd5cba92dda875fff7249cf49"
+}

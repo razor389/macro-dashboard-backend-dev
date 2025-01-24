@@ -3,7 +3,7 @@ use sqlx::PgPool;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::error::Error;
-use chrono::Datelike;
+use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 
 use serde::{Serialize, Deserialize};
 
@@ -139,13 +139,14 @@ impl DbStore {
                     updated_at = NOW()
                 "#,
                 quarter,
-                div as f64,
-                eps_actual.map(|v| *v as f64),
-                eps_estimated.map(|v| *v as f64),
+                BigDecimal::from_f64(*div).unwrap_or_else(|| BigDecimal::from(0)), // Convert f64 to BigDecimal
+                eps_actual.and_then(|v| BigDecimal::from_f64(*v)), // Convert Option<f64> to Option<BigDecimal>
+                eps_estimated.and_then(|v| BigDecimal::from_f64(*v)), // Convert Option<f64> to Option<BigDecimal>
             )
             .execute(&mut *tx)
             .await?;
         }
+        
 
         tx.commit().await?;
         Ok(())
