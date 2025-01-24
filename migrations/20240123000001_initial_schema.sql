@@ -1,4 +1,6 @@
 -- migrations/20240123000001_initial_schema.sql
+BEGIN;
+
 CREATE TABLE market_cache (
     id SERIAL PRIMARY KEY,
     sp500_price DECIMAL NOT NULL,
@@ -22,3 +24,5 @@ CREATE TABLE historical_data (
     eps DECIMAL NOT NULL,
     cape DECIMAL NOT NULL
 );
+
+COMMIT;

@@ -17,55 +17,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Connect to database
     let pool = PgPool::connect(&database_url).await?;
     
-    // Create tables if they don't exist
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS market_cache (
-            id SERIAL PRIMARY KEY,
-            sp500_price DECIMAL NOT NULL,
-            current_cape DECIMAL NOT NULL,
-            last_yahoo_update TIMESTAMP WITH TIME ZONE NOT NULL,
-            last_ycharts_update TIMESTAMP WITH TIME ZONE NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS quarterly_data (
-            quarter VARCHAR(6) PRIMARY KEY,
-            ttm_dividend DECIMAL,
-            eps_actual DECIMAL,
-            eps_estimated DECIMAL,
-            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS historical_data (
-            year INTEGER PRIMARY KEY,
-            sp500_price DECIMAL NOT NULL,
-            dividend DECIMAL NOT NULL,
-            eps DECIMAL NOT NULL,
-            cape DECIMAL NOT NULL
-        );
-        "#
-    )
-    .execute(&pool)
-    .await?;
-
+    //println!("Opening CSV file...");
     // Read CSV file
     let file = File::open("stk_mkt.csv")?;
+    //println!("File opened successfully");
     let mut rdr = Reader::from_reader(file);
-    
+    //println!("CSV reader created");
     // Insert data from CSV
     for result in rdr.records() {
+        //println!("Processing record...");
         let record = result?;
-        
+        //println!("Record content: {:?}", record);
+
         if &record[0] == "Year" {
+            //println!("SKipping header row");
             continue;
         }
         
         let year: i32 = record[0].trim().parse()?;
         let sp500_price = BigDecimal::from_str(record[1].trim())?;
         let dividend = BigDecimal::from_str(record[2].trim())?;
-        let eps = BigDecimal::from_str(record[3].trim())?;
+        let eps = match record[3].trim(){
+            "" => BigDecimal::from(0),
+            val => BigDecimal::from_str(val)?
+        };
         let cape = BigDecimal::from_str(record[4].trim())?;
-        
+        //println!("Parsed year: {}, price: {}, dividend: {}, eps: {}, cape: {}", year, sp500_price, dividend, eps, cape);
         sqlx::query!(
             r#"
             INSERT INTO historical_data (year, sp500_price, dividend, eps, cape)
