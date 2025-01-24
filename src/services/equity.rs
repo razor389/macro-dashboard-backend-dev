@@ -3,7 +3,7 @@ use reqwest::{self, Client};
 use scraper::{Html, Selector};
 use serde::Serialize;
 use std::error::Error;
-use log::info;
+use log::{error, info};
 use regex::Regex;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -84,7 +84,7 @@ fn parse_quarter_date(text: &str) -> Option<String> {
 }
 
 async fn fetch_ycharts_value(url: &str) -> Result<(String, f64), Box<dyn Error>> {
-    info!("Fetching data from {}", url);
+    info!("Fetching data from URL: {}", url);
     
     let client = reqwest::Client::new();
     let response = client
@@ -103,16 +103,35 @@ async fn fetch_ycharts_value(url: &str) -> Result<(String, f64), Box<dyn Error>>
         .and_then(|el| el.text().next())
         .ok_or_else(|| "Failed to find stat")?
         .trim();
-
-    let re = Regex::new(r"(\d+\.?\d*)\s+(?:USD\s+)?(?:for\s+)?(?:Q\d\s+\d{4}|[A-Za-z]+\s+\d{4})")?;
     
-    let value = re.captures(stat)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().parse::<f64>())
-        .ok_or("Failed to parse value")??;
+    info!("Found stat text: {}", stat);
 
-    let quarter = parse_quarter_date(stat)
-        .ok_or("Failed to parse quarter")?;
+    let re = Regex::new(r"([-+]?\d*\.?\d+)\s*(?:USD)?\s*(?:for\s+)?(?:Q\d\s+\d{4}|[A-Za-z]+\s+\d{4})")?;
+    
+    let (value, quarter_text) = match re.captures(stat) {
+        Some(caps) => {
+            let value_str = caps.get(1).ok_or("No value match")?.as_str();
+            let full_match = caps.get(0).ok_or("No full match")?.as_str();
+            let quarter_part = full_match.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+            info!("Parsed value: {}, quarter text: {}", value_str, quarter_part);
+            (value_str.parse::<f64>()?, quarter_part)
+        },
+        None => {
+            error!("Failed to parse value and quarter from stat: {}", stat);
+            return Err("Failed to parse value and quarter".into())
+        }
+    };
+
+    let quarter = match parse_quarter_date(&quarter_text) {
+        Some(q) => {
+            info!("Successfully parsed quarter: {}", q);
+            q
+        },
+        None => {
+            error!("Failed to parse quarter from text: {}", quarter_text);
+            return Err("Failed to parse quarter".into())
+        }
+    };
 
     Ok((quarter, value))
 }
@@ -160,13 +179,16 @@ async fn fetch_ycharts_data() -> Result<YChartsData, Box<dyn Error>> {
 }
 
 pub async fn update_market_data(db: &Arc<DbStore>) -> Result<(), Box<dyn Error>> {
+    info!("Starting market data update");
     let mut cache = db.get_market_cache().await?;
+    let mut data_updated = false;
     
     if cache.needs_yahoo_update() {
         info!("Fetching updated S&P 500 price");
         if let Ok(price) = fetch_sp500_price().await {
             cache.sp500_price = price;
             cache.timestamps.yahoo_price = Utc::now();
+            data_updated = true;
         }
     }
 
@@ -175,47 +197,74 @@ pub async fn update_market_data(db: &Arc<DbStore>) -> Result<(), Box<dyn Error>>
         if let Ok(ycharts_data) = fetch_ycharts_data().await {
             // Update dividends
             for (quarter, value) in ycharts_data.ttm_dividends {
-                cache.ttm_dividends.insert(quarter, value);
+                cache.ttm_dividends.insert(quarter.clone(), value);
+                info!("Updated TTM dividend for {}: {}", quarter, value);
             }
             
             // Update EPS data
             for (quarter, value) in ycharts_data.eps_actual {
-                cache.eps_actual.insert(quarter, value);
+                cache.eps_actual.insert(quarter.clone(), value);
+                info!("Updated actual EPS for {}: {}", quarter, value);
             }
             for (quarter, value) in ycharts_data.eps_estimated {
-                cache.eps_estimated.insert(quarter, value);
+                cache.eps_estimated.insert(quarter.clone(), value);
+                info!("Updated estimated EPS for {}: {}", quarter, value);
             }
             
             cache.current_cape = ycharts_data.cape;
             cache.timestamps.ycharts_data = Utc::now();
+            data_updated = true;
         }
     }
 
-    db.update_market_cache(&cache).await?;
+    if data_updated {
+        info!("Updating market cache in database");
+        db.update_market_cache(&cache).await?;
+        
+        // Check if we have Q4 data for the previous year
+        let prev_year = Utc::now().year() - 1;
+        let q4_key = format!("{}Q4", prev_year);
+        
+        if cache.eps_actual.contains_key(&q4_key) {
+            info!("Found Q4 data for year {}, analyzing complete year", prev_year);
+            analyze_complete_years(db).await?;
+        }
+    }
+
     Ok(())
 }
 
-// Function to analyze completed years and update historical data
 pub async fn analyze_complete_years(db: &Arc<DbStore>) -> Result<(), Box<dyn Error>> {
+    info!("Starting complete year analysis");
     let cache = db.get_market_cache().await?;
     let historical = db.get_historical_data().await?;
     
-    // Get the latest year in historical data
     let latest_year = historical.iter().map(|r| r.year).max().unwrap_or(0);
     let current_year = Utc::now().year() as i32 - 1;
     
     if current_year > latest_year {
-        // Check if we have complete data for the year
+        info!("Analyzing year {} for historical data", current_year);
+        
         let mut quarterly_eps = Vec::new();
         let mut quarterly_div = Vec::new();
         
+        // Check each quarter
         for quarter in 1..=4 {
             let q = format!("{}Q{}", current_year, quarter);
             if let Some(eps) = cache.eps_actual.get(&q) {
+                info!("Found EPS for {}: {}", q, eps);
                 quarterly_eps.push(*eps);
+            } else {
+                info!("Missing EPS for quarter {}", q);
+                return Ok(()); // Exit if we don't have complete data
             }
+            
             if let Some(div) = cache.ttm_dividends.get(&q) {
+                info!("Found dividend for {}: {}", q, div);
                 quarterly_div.push(*div);
+            } else {
+                info!("Missing dividend for quarter {}", q);
+                return Ok(()); // Exit if we don't have complete data
             }
         }
         
@@ -224,7 +273,9 @@ pub async fn analyze_complete_years(db: &Arc<DbStore>) -> Result<(), Box<dyn Err
             let total_eps: f64 = quarterly_eps.iter().sum();
             let avg_div: f64 = quarterly_div.iter().sum::<f64>() / 4.0;
             
-            // Create historical record
+            info!("Creating historical record for year {}", current_year);
+            info!("Total EPS: {}, Average Dividend: {}", total_eps, avg_div);
+            
             let record = crate::services::db::HistoricalRecord {
                 year: current_year,
                 sp500_price: cache.sp500_price,
@@ -234,7 +285,10 @@ pub async fn analyze_complete_years(db: &Arc<DbStore>) -> Result<(), Box<dyn Err
             };
             
             db.add_historical_data(record).await?;
+            info!("Successfully added historical record for year {}", current_year);
         }
+    } else {
+        info!("No new complete years to analyze after year {}", latest_year);
     }
     
     Ok(())
