@@ -4,6 +4,8 @@ use std::{error::Error, fs};
 use dotenv::dotenv;
 use std::env;
 use serde_json::Value;
+use bigdecimal::{BigDecimal, FromPrimitive}; // Import FromPrimitive
+use chrono::Utc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
