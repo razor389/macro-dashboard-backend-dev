@@ -9,6 +9,8 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use chrono::Datelike;
+use bigdecimal::BigDecimal;
+use std::str::FromStr;
 
 use crate::services::db::DbStore;
 
@@ -258,9 +260,9 @@ pub async fn update_market_data(db: &Arc<DbStore>) -> Result<(), Box<dyn Error>>
                     updated_at = NOW()
                 "#,
                 quarter,
-                dividend,
-                eps_actual,
-                eps_estimated,
+                BigDecimal::from_str(&dividend.to_string())?,
+                eps_actual.map(|v| BigDecimal::from_str(&v.to_string())).transpose()?,
+                eps_estimated.map(|v| BigDecimal::from_str(&v.to_string())).transpose()?,
             )
             .execute(&db.pool)
             .await?;
@@ -279,7 +281,7 @@ pub async fn update_market_data(db: &Arc<DbStore>) -> Result<(), Box<dyn Error>>
                         updated_at = NOW()
                     "#,
                     quarter,
-                    value,
+                    BigDecimal::from_str(&value.to_string())?,
                 )
                 .execute(&db.pool)
                 .await?;
@@ -298,7 +300,7 @@ pub async fn update_market_data(db: &Arc<DbStore>) -> Result<(), Box<dyn Error>>
                         updated_at = NOW()
                     "#,
                     quarter,
-                    value,
+                    BigDecimal::from_str(&value.to_string())?,
                 )
                 .execute(&db.pool)
                 .await?;
