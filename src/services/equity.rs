@@ -36,6 +36,16 @@ pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Er
     let mut cache = db.get_market_cache().await?;
     let mut data_updated = false;
 
+    // Force initial fetch if current_sp500_price is 0.0 (default)
+    if cache.current_sp500_price == 0.0 {
+        info!("Initial fetch of current S&P 500 price");
+        if let Ok(price) = fetch_sp500_price().await {
+            cache.current_sp500_price = price;
+            cache.timestamps.yahoo_price = Utc::now();
+            data_updated = true;
+        }
+    }
+
     // 15-Minute Update Check for Current Price
     if cache.timestamps.yahoo_price < Utc::now() - Duration::minutes(15) {
         info!("Updating current S&P 500 price (15-minute interval)");
