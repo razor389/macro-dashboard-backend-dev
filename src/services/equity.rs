@@ -201,11 +201,12 @@ pub async fn update_market_data(db: &Arc<DbStore>) -> Result<(), Box<dyn Error>>
                 info!("Updated TTM dividend for {}: {}", quarter, value);
             }
             
-            // Update EPS data
+            // Update EPS data and ensure data is merged, not replaced
             for (quarter, value) in ycharts_data.eps_actual {
                 cache.eps_actual.insert(quarter.clone(), value);
                 info!("Updated actual EPS for {}: {}", quarter, value);
             }
+            
             for (quarter, value) in ycharts_data.eps_estimated {
                 cache.eps_estimated.insert(quarter.clone(), value);
                 info!("Updated estimated EPS for {}: {}", quarter, value);
@@ -219,9 +220,92 @@ pub async fn update_market_data(db: &Arc<DbStore>) -> Result<(), Box<dyn Error>>
 
     if data_updated {
         info!("Updating market cache in database");
-        db.update_market_cache(&cache).await?;
         
-        // Check if we have Q4 data for the previous year
+        // First update the market_cache table
+        sqlx::query!(
+            r#"
+            INSERT INTO market_cache (sp500_price, current_cape, last_yahoo_update, last_ycharts_update)
+            VALUES ($1, $2, $3, $4)
+            "#,
+            cache.sp500_price as f64,
+            cache.current_cape as f64,
+            cache.timestamps.yahoo_price,
+            cache.timestamps.ycharts_data,
+        )
+        .execute(&db.pool)
+        .await?;
+
+        // Then update quarterly_data table for each data point
+        for (quarter, dividend) in &cache.ttm_dividends {
+            let eps_actual = cache.eps_actual.get(quarter);
+            let eps_estimated = cache.eps_estimated.get(quarter);
+            
+            sqlx::query!(
+                r#"
+                INSERT INTO quarterly_data (quarter, ttm_dividend, eps_actual, eps_estimated, updated_at)
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT (quarter) 
+                DO UPDATE SET 
+                    ttm_dividend = EXCLUDED.ttm_dividend,
+                    eps_actual = CASE 
+                        WHEN EXCLUDED.eps_actual IS NOT NULL THEN EXCLUDED.eps_actual 
+                        ELSE quarterly_data.eps_actual 
+                    END,
+                    eps_estimated = CASE 
+                        WHEN EXCLUDED.eps_estimated IS NOT NULL THEN EXCLUDED.eps_estimated 
+                        ELSE quarterly_data.eps_estimated 
+                    END,
+                    updated_at = NOW()
+                "#,
+                quarter,
+                dividend,
+                eps_actual,
+                eps_estimated,
+            )
+            .execute(&db.pool)
+            .await?;
+        }
+
+        // Additional separate inserts for EPS data without dividends
+        for (quarter, value) in &cache.eps_actual {
+            if !cache.ttm_dividends.contains_key(quarter) {
+                sqlx::query!(
+                    r#"
+                    INSERT INTO quarterly_data (quarter, eps_actual, updated_at)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (quarter) 
+                    DO UPDATE SET 
+                        eps_actual = EXCLUDED.eps_actual,
+                        updated_at = NOW()
+                    "#,
+                    quarter,
+                    value,
+                )
+                .execute(&db.pool)
+                .await?;
+            }
+        }
+
+        for (quarter, value) in &cache.eps_estimated {
+            if !cache.ttm_dividends.contains_key(quarter) {
+                sqlx::query!(
+                    r#"
+                    INSERT INTO quarterly_data (quarter, eps_estimated, updated_at)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (quarter) 
+                    DO UPDATE SET 
+                        eps_estimated = EXCLUDED.eps_estimated,
+                        updated_at = NOW()
+                    "#,
+                    quarter,
+                    value,
+                )
+                .execute(&db.pool)
+                .await?;
+            }
+        }
+
+        // After updating the database, check if we have Q4 data for previous year
         let prev_year = Utc::now().year() - 1;
         let q4_key = format!("{}Q4", prev_year);
         

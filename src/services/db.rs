@@ -46,7 +46,7 @@ impl MarketCache {
 }
 
 pub struct DbStore {
-    pool: PgPool
+    pub(crate) pool: PgPool
 }
 
 impl DbStore {
