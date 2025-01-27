@@ -17,7 +17,8 @@ pub struct CacheTimestamps {
 #[derive(Debug, Default)]
 pub struct MarketCache {
     pub timestamps: CacheTimestamps,
-    pub sp500_price: f64,
+    pub daily_close_sp500_price: f64,
+    pub current_sp500_price: f64,
     pub current_cape: f64,
     pub cape_period: String,
     pub quarterly_dividends: HashMap<String, f64>,
@@ -47,8 +48,8 @@ impl DbStore {
     pub async fn get_market_cache(&self) -> Result<MarketCache, Box<dyn Error>> {
         let cache = sqlx::query!(
             r#"
-            SELECT sp500_price, current_cape, cape_period, last_yahoo_update, last_ycharts_update 
-            FROM market_cache 
+            SELECT daily_close_sp500_price, current_sp500_price, current_cape, cape_period, last_yahoo_update, last_ycharts_update
+            FROM market_cache
             ORDER BY id DESC LIMIT 1
             "#
         )
@@ -83,7 +84,8 @@ impl DbStore {
                     yahoo_price: cache.last_yahoo_update,
                     ycharts_data: cache.last_ycharts_update,
                 },
-                sp500_price: cache.sp500_price.to_f64().unwrap_or(0.0),
+                daily_close_sp500_price: cache.daily_close_sp500_price.to_f64().unwrap_or(0.0),
+                current_sp500_price: cache.current_sp500_price.to_f64().unwrap_or(0.0), // Get current price
                 current_cape: cache.current_cape.to_f64().unwrap_or(0.0),
                 cape_period: cache.cape_period,
                 quarterly_dividends,
@@ -99,18 +101,21 @@ impl DbStore {
         let mut tx = self.pool.begin().await?;
 
         // Convert f64 to BigDecimal for the market cache
-        let sp500_price = BigDecimal::from_f64(cache.sp500_price)
-            .ok_or("Failed to convert sp500_price to BigDecimal")?;
+        let daily_close_sp500_price = BigDecimal::from_f64(cache.daily_close_sp500_price)
+            .ok_or("Failed to convert daily_close_sp500_price to BigDecimal")?;
+        let current_sp500_price = BigDecimal::from_f64(cache.current_sp500_price)
+            .ok_or("Failed to convert current_sp500_price to BigDecimal")?;
         let current_cape = BigDecimal::from_f64(cache.current_cape)
             .ok_or("Failed to convert current_cape to BigDecimal")?;
 
         // Update main cache
         sqlx::query!(
             r#"
-            INSERT INTO market_cache (sp500_price, current_cape, cape_period, last_yahoo_update, last_ycharts_update)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO market_cache (daily_close_sp500_price, current_sp500_price, current_cape, cape_period, last_yahoo_update, last_ycharts_update)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
-            sp500_price,
+            daily_close_sp500_price,
+            current_sp500_price, // Update current price
             current_cape,
             cache.cape_period,
             cache.timestamps.yahoo_price,

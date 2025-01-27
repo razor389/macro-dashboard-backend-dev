@@ -3,7 +3,8 @@ BEGIN;
 
 CREATE TABLE market_cache (
     id SERIAL PRIMARY KEY,
-    sp500_price DECIMAL NOT NULL,
+    daily_close_sp500_price DECIMAL NOT NULL,
+    current_sp500_price DECIMAL NOT NULL,
     current_cape DECIMAL NOT NULL,
     cape_period VARCHAR(20) NOT NULL, -- e.g., "Jan 2025"
     last_yahoo_update TIMESTAMP WITH TIME ZONE NOT NULL,

@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::error::Error;
 use log::{error, info};
 use regex::Regex;
-use chrono::{DateTime, Utc, NaiveTime, Datelike};
+use chrono::{DateTime, Utc, NaiveTime, Datelike, Duration};
 use std::collections::HashMap;
 use std::sync::Arc;
 use chrono_tz::US::Central;
@@ -14,7 +14,8 @@ use crate::services::db::{DbStore, HistoricalRecord};
 
 #[derive(Debug, Serialize)]
 pub struct MarketData {
-    pub sp500_price: f64,
+    pub daily_close_sp500_price: f64,
+    pub current_sp500_price: f64,
     pub quarterly_dividends: HashMap<String, f64>,
     pub eps_actual: HashMap<String, f64>,
     pub eps_estimated: HashMap<String, f64>,
@@ -35,12 +36,22 @@ pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Er
     let mut cache = db.get_market_cache().await?;
     let mut data_updated = false;
 
-    // Check if it's time for daily update (3:30 PM Central)
+    // 15-Minute Update Check for Current Price
+    if cache.timestamps.yahoo_price < Utc::now() - Duration::minutes(15) {
+        info!("Updating current S&P 500 price (15-minute interval)");
+        if let Ok(price) = fetch_sp500_price().await {
+            cache.current_sp500_price = price;
+            cache.timestamps.yahoo_price = Utc::now();
+            data_updated = true;
+        }
+    }
+
+    // Daily Update Check (3:30 PM Central)
     if should_update_daily() {
         info!("Market close time - performing daily updates");
         if let Ok(price) = fetch_sp500_price().await {
-            cache.sp500_price = price;
-            cache.timestamps.yahoo_price = Utc::now();
+            cache.daily_close_sp500_price = price; // Update daily close
+            cache.current_sp500_price = price; // Also update current (it's the same at market close)
             data_updated = true;
         }
 
@@ -49,22 +60,23 @@ pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Er
             cache.timestamps.ycharts_data = Utc::now();
             data_updated = true;
         }
+    }
 
-        if data_updated {
-            info!("Cache updated at market close");
-            db.update_market_cache(&cache).await?;
-            check_historical_updates(db, &cache).await?;
-        }
+    if data_updated {
+        info!("Cache updated");
+        db.update_market_cache(&cache).await?;
+        check_historical_updates(db, &cache).await?;
     }
     
     Ok(MarketData {
-        sp500_price: cache.sp500_price,
+        daily_close_sp500_price: cache.daily_close_sp500_price,
+        current_sp500_price: cache.current_sp500_price,
         quarterly_dividends: cache.quarterly_dividends.clone(),
         eps_actual: cache.eps_actual.clone(),
         eps_estimated: cache.eps_estimated.clone(),
         cape: cache.current_cape,
         cape_period: cache.cape_period.clone(),
-        last_update: cache.timestamps.ycharts_data,
+        last_update: cache.timestamps.ycharts_data, // You might want to adjust which timestamp to return
     })
 }
 
@@ -262,9 +274,9 @@ async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::services::db
     // If it's December 31st at market close, update the yearly closing price
     let ct = Utc::now().with_timezone(&chrono_tz::US::Central);
     if ct.month() == 12 && ct.day() == 31 && should_update_daily() {
-        historical_record.sp500_price = cache.sp500_price;
+        historical_record.sp500_price = cache.daily_close_sp500_price;
         updates_needed = true;
-        info!("Updated historical closing price for {}: {}", prev_year, cache.sp500_price);
+        info!("Updated historical closing price for {}: {}", prev_year, cache.daily_close_sp500_price);
     }
 
     if updates_needed {
