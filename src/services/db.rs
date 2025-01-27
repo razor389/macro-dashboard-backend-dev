@@ -4,7 +4,6 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::error::Error;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
-
 use serde::{Serialize, Deserialize};
 
 // Update CacheTimestamps struct
@@ -108,14 +107,20 @@ impl DbStore {
     pub async fn update_market_cache(&self, cache: &MarketCache) -> Result<(), Box<dyn Error>> {
         let mut tx = self.pool.begin().await?;
 
+        // Convert f64 to BigDecimal for the market cache
+        let sp500_price = BigDecimal::from_f64(cache.sp500_price)
+            .ok_or("Failed to convert sp500_price to BigDecimal")?;
+        let current_cape = BigDecimal::from_f64(cache.current_cape)
+            .ok_or("Failed to convert current_cape to BigDecimal")?;
+
         // Update main cache
         sqlx::query!(
             r#"
             INSERT INTO market_cache (sp500_price, current_cape, last_yahoo_update, last_ycharts_update)
             VALUES ($1, $2, $3, $4)
             "#,
-            cache.sp500_price as f64,
-            cache.current_cape as f64,
+            sp500_price,
+            current_cape,
             cache.timestamps.yahoo_price,
             cache.timestamps.ycharts_data,
         )
@@ -124,8 +129,22 @@ impl DbStore {
 
         // Update quarterly data
         for (quarter, div) in &cache.ttm_dividends {
-            let eps_actual = cache.eps_actual.get(quarter);
-            let eps_estimated = cache.eps_estimated.get(quarter);
+            let div_decimal = BigDecimal::from_f64(*div)
+                .ok_or("Failed to convert dividend to BigDecimal")?;
+            
+            let eps_actual = if let Some(v) = cache.eps_actual.get(quarter) {
+                Some(BigDecimal::from_f64(*v)
+                    .ok_or("Failed to convert eps_actual to BigDecimal")?)
+            } else {
+                None
+            };
+            
+            let eps_estimated = if let Some(v) = cache.eps_estimated.get(quarter) {
+                Some(BigDecimal::from_f64(*v)
+                    .ok_or("Failed to convert eps_estimated to BigDecimal")?)
+            } else {
+                None
+            };
             
             sqlx::query!(
                 r#"
@@ -134,19 +153,69 @@ impl DbStore {
                 ON CONFLICT (quarter) 
                 DO UPDATE SET 
                     ttm_dividend = EXCLUDED.ttm_dividend,
-                    eps_actual = EXCLUDED.eps_actual,
-                    eps_estimated = EXCLUDED.eps_estimated,
+                    eps_actual = CASE 
+                        WHEN EXCLUDED.eps_actual IS NOT NULL THEN EXCLUDED.eps_actual 
+                        ELSE quarterly_data.eps_actual 
+                    END,
+                    eps_estimated = CASE 
+                        WHEN EXCLUDED.eps_estimated IS NOT NULL THEN EXCLUDED.eps_estimated 
+                        ELSE quarterly_data.eps_estimated 
+                    END,
                     updated_at = NOW()
                 "#,
                 quarter,
-                BigDecimal::from_f64(*div).unwrap_or_else(|| BigDecimal::from(0)), // Convert f64 to BigDecimal
-                eps_actual.and_then(|v| BigDecimal::from_f64(*v)), // Convert Option<f64> to Option<BigDecimal>
-                eps_estimated.and_then(|v| BigDecimal::from_f64(*v)), // Convert Option<f64> to Option<BigDecimal>
+                div_decimal,
+                eps_actual,
+                eps_estimated,
             )
             .execute(&mut *tx)
             .await?;
         }
-        
+
+        // Handle standalone EPS entries (not associated with dividends)
+        for (quarter, eps) in &cache.eps_actual {
+            if !cache.ttm_dividends.contains_key(quarter) {
+                let eps_decimal = BigDecimal::from_f64(*eps)
+                    .ok_or("Failed to convert eps to BigDecimal")?;
+                
+                sqlx::query!(
+                    r#"
+                    INSERT INTO quarterly_data (quarter, eps_actual, updated_at)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (quarter) 
+                    DO UPDATE SET 
+                        eps_actual = EXCLUDED.eps_actual,
+                        updated_at = NOW()
+                    "#,
+                    quarter,
+                    eps_decimal,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        for (quarter, eps) in &cache.eps_estimated {
+            if !cache.ttm_dividends.contains_key(quarter) {
+                let eps_decimal = BigDecimal::from_f64(*eps)
+                    .ok_or("Failed to convert eps to BigDecimal")?;
+                
+                sqlx::query!(
+                    r#"
+                    INSERT INTO quarterly_data (quarter, eps_estimated, updated_at)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (quarter) 
+                    DO UPDATE SET 
+                        eps_estimated = EXCLUDED.eps_estimated,
+                        updated_at = NOW()
+                    "#,
+                    quarter,
+                    eps_decimal,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
 
         tx.commit().await?;
         Ok(())
@@ -164,10 +233,10 @@ impl DbStore {
                 cape = EXCLUDED.cape
             "#,
             record.year,
-            record.sp500_price as f64,
-            record.dividend as f64,
-            record.eps as f64,
-            record.cape as f64,
+            BigDecimal::from_f64(record.sp500_price).ok_or("Failed to convert sp500_price")?,
+            BigDecimal::from_f64(record.dividend).ok_or("Failed to convert dividend")?,
+            BigDecimal::from_f64(record.eps).ok_or("Failed to convert eps")?,
+            BigDecimal::from_f64(record.cape).ok_or("Failed to convert cape")?,
         )
         .execute(&self.pool)
         .await?;
