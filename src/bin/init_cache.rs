@@ -4,7 +4,7 @@ use std::{error::Error, fs};
 use dotenv::dotenv;
 use std::env;
 use serde_json::Value;
-use bigdecimal::{BigDecimal, FromPrimitive}; // Import FromPrimitive
+use bigdecimal::{BigDecimal, FromPrimitive};
 use chrono::Utc;
 
 #[tokio::main]
@@ -26,23 +26,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     sqlx::query!(
         r#"
         INSERT INTO market_cache (
-            sp500_price,
+            daily_close_sp500_price,    -- Updated column name
+            current_sp500_price,      -- New column
             current_cape,
             cape_period,
             last_yahoo_update,
             last_ycharts_update
         )
-        VALUES ($1, $2, $3, $4, $4)
+        VALUES ($1, $2, $3, $4, $5, $5)  -- Added a placeholder for current_sp500_price
         "#,
-        BigDecimal::from(0), // Will be updated by Yahoo fetch
-        BigDecimal::from_f64(init_data["cape"]["value"].as_f64().unwrap()).unwrap(), // Use as_f64()
+        BigDecimal::from(0), // Placeholder, will be updated later
+        BigDecimal::from(0), // Placeholder, will be updated later by the app
+        BigDecimal::from_f64(init_data["cape"]["value"].as_f64().unwrap()).unwrap(),
         init_data["cape"]["period"].as_str().unwrap(),
         Utc::now()
     )
     .execute(&pool)
     .await?;
 
-    // Initialize quarterly data
+    // Initialize quarterly data (no changes needed here)
     for (quarter, value) in init_data["quarterly_earnings"].as_object().unwrap() {
         if let Some(num) = value.as_f64() {
             sqlx::query!(
@@ -59,7 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     updated_at = EXCLUDED.updated_at
                 "#,
                 quarter,
-                BigDecimal::from_f64(num).unwrap(), // Use from_f64()
+                BigDecimal::from_f64(num).unwrap(),
                 Utc::now()
             )
             .execute(&pool)
@@ -83,7 +85,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     updated_at = EXCLUDED.updated_at
                 "#,
                 quarter,
-                BigDecimal::from_f64(num).unwrap(), // Use from_f64()
+                BigDecimal::from_f64(num).unwrap(),
                 Utc::now()
             )
             .execute(&pool)
@@ -107,7 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     updated_at = EXCLUDED.updated_at
                 "#,
                 quarter,
-                BigDecimal::from_f64(num).unwrap(), // Use from_f64()
+                BigDecimal::from_f64(num).unwrap(),
                 Utc::now()
             )
             .execute(&pool)
