@@ -18,3 +18,29 @@ pub async fn get_equity_data(db: Arc<DbStore>) -> Result<Json, Rejection> {
         }
     }
 }
+
+pub async fn get_equity_history(db: Arc<DbStore>) -> Result<Json, Rejection> {
+    match equity::get_historical_data(&db).await {
+        Ok(data) => {
+            info!("Successfully fetched historical data");
+            Ok(warp::reply::json(&data))
+        }
+        Err(e) => {
+            error!("Failed to fetch historical data: {}", e);
+            Err(warp::reject::not_found())
+        }
+    }
+}
+
+pub async fn get_equity_history_range(start_year: i32, end_year: i32, db: Arc<DbStore>) -> Result<Json, Rejection> {
+    match equity::get_historical_data_range(&db, start_year, end_year).await {
+        Ok(data) => {
+            info!("Successfully fetched historical data range");
+            Ok(warp::reply::json(&data))
+        }
+        Err(e) => {
+            error!("Failed to fetch historical data range: {}", e);
+            Err(warp::reject::not_found())
+        }
+    }
+}
