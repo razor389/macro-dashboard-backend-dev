@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use crate::services::google_oauth::fetch_access_token_from_file;
+use crate::{models::QuarterlyData, services::google_oauth::fetch_access_token_from_file};
 use log::info;
 use serde_json::json;
 use reqwest::Client;
@@ -43,7 +43,7 @@ pub struct RawMarketCache {
 }
 
 pub struct SheetsStore {
-    config: SheetsConfig,
+    pub config: SheetsConfig,
     client: Client,
     sheet_names: SheetNames,
 }
@@ -55,6 +55,10 @@ impl SheetsStore {
             client: reqwest::Client::new(),
             sheet_names: SheetNames::default(),
         }
+    }
+
+    pub async fn get_auth_token(&self) -> Result<String, Box<dyn Error>> {
+        crate::services::google_oauth::fetch_access_token_from_file(&self.config.service_account_json_path).await
     }
 
     /// Example of reading from the "MarketCache!A2:F2" range
@@ -281,13 +285,4 @@ impl SheetsStore {
         info!("update_historical_record response: {:?}", resp);
         Ok(())
     }
-}
-
-// For your quarterly data usage:
-#[derive(Debug, Serialize, Deserialize)]
-pub struct QuarterlyData {
-    pub quarter: String,
-    pub dividend: Option<f64>,
-    pub eps_actual: Option<f64>,
-    pub eps_estimated: Option<f64>,
 }

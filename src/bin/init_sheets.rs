@@ -6,8 +6,8 @@ use serde_json::Value;
 use chrono::Utc;
 use std::env;
 
-use macro_dashboard_acm::services::sheets::{SheetsStore, SheetsConfig, RawMarketCache, QuarterlyData};
-// or if you put `QuarterlyData` in `models`: use macro_dashboard_acm::models::QuarterlyData;
+use macro_dashboard_acm::services::sheets::{SheetsStore, SheetsConfig, RawMarketCache};
+use macro_dashboard_acm::models::QuarterlyData;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
