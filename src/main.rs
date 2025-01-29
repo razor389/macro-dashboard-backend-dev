@@ -1,5 +1,6 @@
 // src/main.rs
 
+use chrono::offset::LocalResult;
 use dotenv::dotenv;
 use env_logger;
 use log::{info, warn, error};
@@ -59,9 +60,23 @@ async fn main() {
     tokio::spawn(async move {
         let now = Utc::now();
         let central_now = now.with_timezone(&Central);
-        let target = Central.ymd(central_now.year(), central_now.month(), central_now.day())
-            .and_hms_opt(15, 30, 0)
-            .expect("Invalid time");
+        let target = match Central.with_ymd_and_hms(
+            central_now.year(),
+            central_now.month(),
+            central_now.day(),
+            15,
+            30,
+            0,
+        ) {
+            LocalResult::None => {
+                panic!("Invalid date/time");
+            }
+            LocalResult::Ambiguous(dt1, dt2) => {
+                panic!("Ambiguous local time: {} or {}", dt1, dt2);
+            }
+            LocalResult::Single(dt) => dt,
+        };
+
 
         // If we're starting after 3:30 PM Central and haven't updated today
         if central_now.time() > target.time() {
