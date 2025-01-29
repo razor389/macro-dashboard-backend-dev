@@ -21,7 +21,7 @@ async fn main() {
 
     // Initialize database connection
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let db = services::db::DbStore::new(&database_url)
+    let db = services::sheets::DbStore::new(&database_url)
         .await
         .expect("Failed to connect to database");
     let db = Arc::new(db);

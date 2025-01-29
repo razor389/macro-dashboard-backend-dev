@@ -3,7 +3,7 @@ use warp::Rejection;
 use crate::services::treasury::fetch_tbill_data;
 use log::{info, error};
 use std::sync::Arc;
-use crate::services::db::DbStore;
+use crate::services::sheets::DbStore;
 
 pub async fn get_tbill(_db: Arc<DbStore>) -> Result<Json, Rejection> {
     info!("Handling request to get T-bill rate.");

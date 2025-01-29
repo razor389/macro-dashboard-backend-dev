@@ -4,7 +4,7 @@ use warp::Rejection;
 use crate::services::equity;
 use log::{error, info};
 use std::sync::Arc;
-use crate::services::db::DbStore;
+use crate::services::sheets::DbStore;
 
 pub async fn get_equity_data(db: Arc<DbStore>) -> Result<Json, Rejection> {
     match equity::get_market_data(&db).await {

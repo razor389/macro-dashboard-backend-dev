@@ -1,0 +1,34 @@
+{
+    "sheets": {
+      "market_cache": {
+        "name": "MarketCache",
+        "columns": [
+          "timestamp_yahoo",
+          "timestamp_ycharts",
+          "daily_close_sp500_price",
+          "current_sp500_price",
+          "current_cape",
+          "cape_period"
+        ]
+      },
+      "quarterly_data": {
+        "name": "QuarterlyData",
+        "columns": [
+          "quarter",
+          "dividend",
+          "eps_actual",
+          "eps_estimated"
+        ]
+      },
+      "historical_data": {
+        "name": "HistoricalData",
+        "columns": [
+          "year",
+          "sp500_price",
+          "dividend",
+          "eps",
+          "cape"
+        ]
+      }
+    }
+  }
