@@ -50,15 +50,7 @@ pub async fn fetch_access_token_from_file(
         iat: iat.timestamp(),
     };
 
-    // 3. Create a signed JWT using the private_key from the file
-    // Google private_key is in PEM format. We'll remove the "-----BEGIN..." lines internally.
-    let private_key = key.private_key
-        .replace("-----BEGIN PRIVATE KEY-----", "")
-        .replace("-----END PRIVATE KEY-----", "")
-        .replace("\n", "");
-
-    let decoded_key = base64::decode(private_key)?;
-    let encoding_key = EncodingKey::from_rsa_pkcs8(&decoded_key)?;
+    let encoding_key = EncodingKey::from_rsa_pem(key.private_key.as_bytes())?;
 
     let jwt = encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)?;
 
@@ -74,6 +66,7 @@ pub async fn fetch_access_token_from_file(
     };
 
     #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
     struct TokenResponse {
         access_token: String,
         token_type: String,

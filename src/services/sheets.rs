@@ -6,6 +6,7 @@ use crate::services::google_oauth::fetch_access_token_from_file;
 use log::info;
 use serde_json::json;
 use reqwest::Client;
+use crate::models::HistoricalRecord;
 
 #[derive(Clone)]
 pub struct SheetsConfig {
@@ -289,14 +290,4 @@ pub struct QuarterlyData {
     pub dividend: Option<f64>,
     pub eps_actual: Option<f64>,
     pub eps_estimated: Option<f64>,
-}
-
-// For your historical usage:
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HistoricalRecord {
-    pub year: i32,
-    pub sp500_price: f64,
-    pub dividend: f64,
-    pub eps: f64,
-    pub cape: f64,
 }
