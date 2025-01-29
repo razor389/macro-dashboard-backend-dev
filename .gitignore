@@ -2,3 +2,4 @@
 **/*.rs.bk
 .env
 Cargo.lock
+service_account.json

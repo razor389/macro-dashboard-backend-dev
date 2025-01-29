@@ -1,14 +1,17 @@
 // src/services/sheets.rs
-use reqwest;
+
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use crate::models::{MarketCache, QuarterlyData, HistoricalRecord};
+use crate::services::google_oauth::fetch_access_token_from_file;
+use log::info;
+use serde_json::json;
+use reqwest::Client;
 
-// Configuration struct for Google Sheets
 #[derive(Clone)]
 pub struct SheetsConfig {
     pub spreadsheet_id: String,
-    pub api_key: String,
+    // Instead of `api_key`, store the path to your service account JSON
+    pub service_account_json_path: String,
 }
 
 // Represents the structure of our sheets
@@ -40,7 +43,7 @@ pub struct RawMarketCache {
 
 pub struct SheetsStore {
     config: SheetsConfig,
-    client: reqwest::Client,
+    client: Client,
     sheet_names: SheetNames,
 }
 
@@ -53,24 +56,36 @@ impl SheetsStore {
         }
     }
 
+    /// Example of reading from the "MarketCache!A2:F2" range
     pub async fn get_market_cache(&self) -> Result<RawMarketCache, Box<dyn Error>> {
+        // 1. Fetch a token from the JSON
+        let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
+
         let range = format!("{}!A2:F2", self.sheet_names.market_cache);
         let url = format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?key={}",
-            self.config.spreadsheet_id, range, self.config.api_key
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
+            self.config.spreadsheet_id, range
         );
 
-        let response: serde_json::Value = self.client.get(&url).send().await?.json().await?;
-        
+        // 2. Bearer auth
+        let response: serde_json::Value = self.client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
         if let Some(values) = response["values"].as_array() {
             if let Some(row) = values.first() {
                 return Ok(RawMarketCache {
-                    timestamp_yahoo: row[0].as_str().unwrap_or("").to_string(),
-                    timestamp_ycharts: row[1].as_str().unwrap_or("").to_string(),
-                    daily_close_sp500_price: row[2].as_str().unwrap_or("0").parse()?,
-                    current_sp500_price: row[3].as_str().unwrap_or("0").parse()?,
-                    current_cape: row[4].as_str().unwrap_or("0").parse()?,
-                    cape_period: row[5].as_str().unwrap_or("").to_string(),
+                    timestamp_yahoo: row.get(0).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    timestamp_ycharts: row.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    daily_close_sp500_price: row.get(2).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    current_sp500_price: row.get(3).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    current_cape: row.get(4).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    cape_period: row.get(5).and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 });
             }
         }
@@ -78,11 +93,14 @@ impl SheetsStore {
         Err("No market cache data found".into())
     }
 
+    /// Example of updating the "MarketCache!A2:F2" range
     pub async fn update_market_cache(&self, cache: &RawMarketCache) -> Result<(), Box<dyn Error>> {
+        let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
+
         let range = format!("{}!A2:F2", self.sheet_names.market_cache);
         let url = format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW&key={}",
-            self.config.spreadsheet_id, range, self.config.api_key
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW",
+            self.config.spreadsheet_id, range
         );
 
         let values = vec![vec![
@@ -94,43 +112,67 @@ impl SheetsStore {
             cache.cape_period.clone(),
         ]];
 
-        let body = serde_json::json!({
+        let body = json!({
             "values": values,
         });
 
-        self.client.put(&url).json(&body).send().await?;
+        let resp = self.client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        info!("update_market_cache response: {:?}", resp);
         Ok(())
     }
 
+    /// Example of reading from "QuarterlyData!A2:D" range
     pub async fn get_quarterly_data(&self) -> Result<Vec<QuarterlyData>, Box<dyn Error>> {
+        let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
+
         let range = format!("{}!A2:D", self.sheet_names.quarterly_data);
         let url = format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?key={}",
-            self.config.spreadsheet_id, range, self.config.api_key
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
+            self.config.spreadsheet_id, range
         );
 
-        let response: serde_json::Value = self.client.get(&url).send().await?.json().await?;
-        
+        let response: serde_json::Value = self.client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
         let mut quarterly_data = Vec::new();
         if let Some(values) = response["values"].as_array() {
             for row in values {
+                let quarter = row.get(0).and_then(|v| v.as_str()).unwrap_or("");
+                let dividend = row.get(1).and_then(|v| v.as_str()).unwrap_or("").parse().ok();
+                let eps_actual = row.get(2).and_then(|v| v.as_str()).unwrap_or("").parse().ok();
+                let eps_estimated = row.get(3).and_then(|v| v.as_str()).unwrap_or("").parse().ok();
+
                 quarterly_data.push(QuarterlyData {
-                    quarter: row[0].as_str().unwrap_or("").to_string(),
-                    dividend: row[1].as_str().and_then(|s| s.parse().ok()),
-                    eps_actual: row[2].as_str().and_then(|s| s.parse().ok()),
-                    eps_estimated: row[3].as_str().and_then(|s| s.parse().ok()),
+                    quarter: quarter.to_string(),
+                    dividend,
+                    eps_actual,
+                    eps_estimated,
                 });
             }
         }
-
         Ok(quarterly_data)
     }
 
     pub async fn update_quarterly_data(&self, data: &[QuarterlyData]) -> Result<(), Box<dyn Error>> {
+        let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
+
         let range = format!("{}!A2:D{}", self.sheet_names.quarterly_data, data.len() + 1);
         let url = format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW&key={}",
-            self.config.spreadsheet_id, range, self.config.api_key
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW",
+            self.config.spreadsheet_id, range
         );
 
         let values: Vec<Vec<String>> = data.iter().map(|row| {
@@ -142,32 +184,56 @@ impl SheetsStore {
             ]
         }).collect();
 
-        let body = serde_json::json!({
+        let body = json!({
             "values": values,
         });
 
-        self.client.put(&url).json(&body).send().await?;
+        let resp = self.client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        info!("update_quarterly_data response: {:?}", resp);
         Ok(())
     }
 
+    /// Example of reading/writing the "HistoricalData!A2:E" for your HistoricalRecord
     pub async fn get_historical_data(&self) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {
+        let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
+
         let range = format!("{}!A2:E", self.sheet_names.historical_data);
         let url = format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?key={}",
-            self.config.spreadsheet_id, range, self.config.api_key
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
+            self.config.spreadsheet_id, range
         );
 
-        let response: serde_json::Value = self.client.get(&url).send().await?.json().await?;
-        
+        let response: serde_json::Value = self.client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
         let mut historical_data = Vec::new();
         if let Some(values) = response["values"].as_array() {
             for row in values {
+                let year = row.get(0).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
+                let sp500_price = row.get(1).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
+                let dividend = row.get(2).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
+                let eps = row.get(3).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
+                let cape = row.get(4).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
+
                 historical_data.push(HistoricalRecord {
-                    year: row[0].as_str().unwrap_or("0").parse()?,
-                    sp500_price: row[1].as_str().unwrap_or("0").parse()?,
-                    dividend: row[2].as_str().unwrap_or("0").parse()?,
-                    eps: row[3].as_str().unwrap_or("0").parse()?,
-                    cape: row[4].as_str().unwrap_or("0").parse()?,
+                    year,
+                    sp500_price,
+                    dividend,
+                    eps,
+                    cape,
                 });
             }
         }
@@ -176,20 +242,19 @@ impl SheetsStore {
     }
 
     pub async fn update_historical_record(&self, record: &HistoricalRecord) -> Result<(), Box<dyn Error>> {
-        // First get all records to find the correct row to update
+        // fetch all records to find the matching row
         let all_records = self.get_historical_data().await?;
         let row_index = all_records.iter().position(|r| r.year == record.year)
             .ok_or("Record not found")?;
 
-        let range = format!("{}!A{}:E{}", 
-            self.sheet_names.historical_data,
-            row_index + 2,  // +2 because sheet indices start at 1 and we have a header row
-            row_index + 2
-        );
+        let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
 
+        // +2 offset: first row is headers
+        let row_num = row_index + 2;
+        let range = format!("{}!A{}:E{}", self.sheet_names.historical_data, row_num, row_num);
         let url = format!(
-            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW&key={}",
-            self.config.spreadsheet_id, range, self.config.api_key
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW",
+            self.config.spreadsheet_id, range
         );
 
         let values = vec![vec![
@@ -200,11 +265,38 @@ impl SheetsStore {
             record.cape.to_string(),
         ]];
 
-        let body = serde_json::json!({
+        let body = json!({
             "values": values,
         });
 
-        self.client.put(&url).json(&body).send().await?;
+        let resp = self.client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        info!("update_historical_record response: {:?}", resp);
         Ok(())
     }
+}
+
+// For your quarterly data usage:
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QuarterlyData {
+    pub quarter: String,
+    pub dividend: Option<f64>,
+    pub eps_actual: Option<f64>,
+    pub eps_estimated: Option<f64>,
+}
+
+// For your historical usage:
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HistoricalRecord {
+    pub year: i32,
+    pub sp500_price: f64,
+    pub dividend: f64,
+    pub eps: f64,
+    pub cape: f64,
 }

@@ -1,24 +1,27 @@
 // src/bin/init_sheets.rs
+
 use dotenv::dotenv;
 use std::{error::Error, fs};
 use serde_json::Value;
 use chrono::Utc;
-use macro_dashboard_acm::services::sheets::{SheetsStore, SheetsConfig, MarketCache, QuarterlyData};
+use std::env;
+
+use macro_dashboard_acm::services::sheets::{SheetsStore, SheetsConfig, RawMarketCache, QuarterlyData};
+// or if you put `QuarterlyData` in `models`: use macro_dashboard_acm::models::QuarterlyData;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
 
-    // Get configuration from environment
-    let spreadsheet_id = std::env::var("GOOGLE_SHEETS_ID")?;
-    let api_key = std::env::var("GOOGLE_API_KEY")?;
+    // e.g. .env has GOOGLE_SHEETS_ID=...  SERVICE_ACCOUNT_JSON=service_account.json
+    let spreadsheet_id = env::var("GOOGLE_SHEETS_ID")?;
+    let sa_json = env::var("SERVICE_ACCOUNT_JSON")?;
 
     let config = SheetsConfig {
         spreadsheet_id,
-        api_key,
+        service_account_json_path: sa_json,
     };
 
-    // Initialize sheets store
     let store = SheetsStore::new(config);
 
     // Read initialization data
@@ -26,8 +29,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &fs::read_to_string("config/market_init.json")?
     )?;
 
-    // Initialize market cache
-    let market_cache = MarketCache {
+    // Fill a RawMarketCache with your data
+    let market_cache = RawMarketCache {
         timestamp_yahoo: Utc::now().to_rfc3339(),
         timestamp_ycharts: Utc::now().to_rfc3339(),
         daily_close_sp500_price: 0.0,
@@ -38,53 +41,60 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     store.update_market_cache(&market_cache).await?;
 
-    // Initialize quarterly data
+    // Build QuarterlyData rows
     let mut quarterly_data = Vec::new();
 
     // Process earnings data
-    for (quarter, value) in init_data["quarterly_earnings"].as_object().unwrap() {
-        if let Some(num) = value.as_f64() {
-            quarterly_data.push(QuarterlyData {
-                quarter: quarter.clone(),
-                dividend: None,
-                eps_actual: Some(num),
-                eps_estimated: None,
-            });
-        }
-    }
-
-    // Process dividend data
-    for (quarter, value) in init_data["quarterly_dividends"].as_object().unwrap() {
-        if let Some(num) = value.as_f64() {
-            if let Some(existing) = quarterly_data.iter_mut().find(|q| q.quarter == *quarter) {
-                existing.dividend = Some(num);
-            } else {
+    if let Some(q_earnings) = init_data["quarterly_earnings"].as_object() {
+        for (quarter, value) in q_earnings {
+            if let Some(num) = value.as_f64() {
                 quarterly_data.push(QuarterlyData {
                     quarter: quarter.clone(),
-                    dividend: Some(num),
-                    eps_actual: None,
+                    dividend: None,
+                    eps_actual: Some(num),
                     eps_estimated: None,
                 });
             }
         }
     }
 
-    // Process earnings estimates
-    for (quarter, value) in init_data["earnings_estimates"].as_object().unwrap() {
-        if let Some(num) = value.as_f64() {
-            if let Some(existing) = quarterly_data.iter_mut().find(|q| q.quarter == *quarter) {
-                existing.eps_estimated = Some(num);
-            } else {
-                quarterly_data.push(QuarterlyData {
-                    quarter: quarter.clone(),
-                    dividend: None,
-                    eps_actual: None,
-                    eps_estimated: Some(num),
-                });
+    // Process dividend data
+    if let Some(q_divs) = init_data["quarterly_dividends"].as_object() {
+        for (quarter, value) in q_divs {
+            if let Some(num) = value.as_f64() {
+                if let Some(existing) = quarterly_data.iter_mut().find(|q| q.quarter == *quarter) {
+                    existing.dividend = Some(num);
+                } else {
+                    quarterly_data.push(QuarterlyData {
+                        quarter: quarter.clone(),
+                        dividend: Some(num),
+                        eps_actual: None,
+                        eps_estimated: None,
+                    });
+                }
             }
         }
     }
 
+    // Process earnings estimates
+    if let Some(q_est) = init_data["earnings_estimates"].as_object() {
+        for (quarter, value) in q_est {
+            if let Some(num) = value.as_f64() {
+                if let Some(existing) = quarterly_data.iter_mut().find(|q| q.quarter == *quarter) {
+                    existing.eps_estimated = Some(num);
+                } else {
+                    quarterly_data.push(QuarterlyData {
+                        quarter: quarter.clone(),
+                        dividend: None,
+                        eps_actual: None,
+                        eps_estimated: Some(num),
+                    });
+                }
+            }
+        }
+    }
+
+    // Now upload them to the sheet
     store.update_quarterly_data(&quarterly_data).await?;
 
     println!("Sheet initialization complete!");

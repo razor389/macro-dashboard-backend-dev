@@ -1,3 +1,5 @@
+// src/main.rs
+
 use dotenv::dotenv;
 use env_logger;
 use log::{info, warn, error};
@@ -9,10 +11,9 @@ use tokio_cron_scheduler::{JobScheduler, Job};
 use chrono_tz::US::Central;
 use chrono::{Utc, TimeZone, Datelike};
 
-mod handlers;
-mod services;
-mod routes;
-mod models;
+use macro_dashboard_acm::handlers;
+use macro_dashboard_acm::services;
+use macro_dashboard_acm::routes;
 
 #[tokio::main]
 async fn main() {
@@ -23,7 +24,11 @@ async fn main() {
     // Initialize Google Sheets connection
     let spreadsheet_id = env::var("GOOGLE_SHEETS_ID")
         .expect("GOOGLE_SHEETS_ID must be set");
-    let db = services::db::DbStore::new(&spreadsheet_id)
+    // Instead of an API key, we use the service account JSON path
+    let service_account_json_path = env::var("SERVICE_ACCOUNT_JSON")
+        .expect("SERVICE_ACCOUNT_JSON must be set");
+
+    let db = services::db::DbStore::new(&spreadsheet_id, &service_account_json_path)
         .await
         .expect("Failed to initialize Google Sheets connection");
     let db = Arc::new(db);
@@ -32,7 +37,7 @@ async fn main() {
 
     // Initialize the scheduler
     let scheduler = JobScheduler::new().await.expect("Failed to create scheduler");
-    
+
     // Schedule market data updates for 3:30 PM Central every day
     let daily_job = Job::new_async("0 30 15 * * *", move |_, _| {
         let db = scheduler_db.clone();
@@ -63,7 +68,7 @@ async fn main() {
         if central_now.time() > target.time() {
             let cache = db_clone.get_market_cache().await
                 .expect("Failed to get market cache");
-            
+
             let last_update = cache.timestamps.yahoo_price.with_timezone(&Central);
             if last_update.date_naive() < central_now.date_naive() {
                 info!("Catching up on missed market update");
@@ -79,7 +84,7 @@ async fn main() {
         warn!("$PORT not set, defaulting to 3030");
         "3030".to_string()
     });
-    
+
     let port: u16 = port_str.parse().expect("PORT must be a number");
     let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     info!("Will bind to: {}", addr);

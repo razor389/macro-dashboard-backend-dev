@@ -1,39 +1,39 @@
 // src/bin/setup_sheets.rs
+
 use csv::Reader;
 use dotenv::dotenv;
 use std::{error::Error, fs::File};
-use macro_dashboard_acm::sheets::{SheetsStore, SheetsConfig, HistoricalRecord};
+use std::env;
+use macro_dashboard_acm::services::sheets::{SheetsStore, SheetsConfig, HistoricalRecord};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
-    
-    // Get configuration from environment
-    let spreadsheet_id = std::env::var("GOOGLE_SHEETS_ID")?;
-    let api_key = std::env::var("GOOGLE_API_KEY")?;
+
+    let spreadsheet_id = env::var("GOOGLE_SHEETS_ID")?;
+    let sa_json = env::var("SERVICE_ACCOUNT_JSON")?;
 
     let config = SheetsConfig {
         spreadsheet_id,
-        api_key,
+        service_account_json_path: sa_json,
     };
 
-    // Initialize sheets store
     let store = SheetsStore::new(config);
-    
+
     // Read CSV file
     let file = File::open("data/stk_mkt.csv")?;
     let mut rdr = Reader::from_reader(file);
 
-    // Process and upload historical data
     let mut historical_records = Vec::new();
-    
+
     for result in rdr.records() {
         let record = result?;
-        
+        // If the CSV has a header named "Year", skip it
         if &record[0] == "Year" {
             continue;
         }
-        
+
+        // Parse each row into a HistoricalRecord
         historical_records.push(HistoricalRecord {
             year: record[0].trim().parse()?,
             sp500_price: record[1].trim().parse()?,
@@ -43,11 +43,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
-    // Update records in batches to avoid API rate limits
-    for record in historical_records {
-        store.update_historical_record(&record).await?;
+    // Update each row in the sheet
+    for hr in historical_records {
+        store.update_historical_record(&hr).await?;
     }
-    
+
     println!("Historical data setup complete!");
     Ok(())
 }
