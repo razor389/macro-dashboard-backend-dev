@@ -1,79 +1,147 @@
-// src/bin/setup_sheets.rs
-
+//src/bin/setup_sheets.rs
 use csv::Reader;
 use dotenv::dotenv;
 use log::{info, error};
 use macro_dashboard_acm::models::HistoricalRecord;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{error::Error, fs::File};
 use std::env;
 use macro_dashboard_acm::services::sheets::{SheetsStore, SheetsConfig};
 
-async fn create_sheet_if_not_exists(store: &SheetsStore, sheet_name: &str, headers: Vec<&str>) -> Result<(), Box<dyn Error>> {
-    // First try to read the sheet - if it fails, we'll create it
-    let token = store.get_auth_token().await?;
-    let spreadsheet_id = &store.config.spreadsheet_id;
-    
-    // Create a request to add a sheet
-    let add_sheet_request = json!({
-        "requests": [{
-            "addSheet": {
-                "properties": {
-                    "title": sheet_name,
-                    "gridProperties": {
-                        "rowCount": 1000,
-                        "columnCount": headers.len(),
-                        "frozenRowCount": 1
-                    }
-                }
-            }
-        }]
-    });
 
-    // Try to add the sheet
+async fn verify_spreadsheet_access(store: &SheetsStore) -> Result<(), Box<dyn Error>> {
+    let token = store.get_auth_token().await?;
     let client = reqwest::Client::new();
+    
+    // Note: URL format is specifically for Google Sheets API v4
     let url = format!(
-        "https://sheets.googleapis.com/v4/spreadsheets/{}/batchUpdate",
-        spreadsheet_id
+        "https://sheets.googleapis.com/v4/spreadsheets/{}?includeGridData=false",
+        store.config.spreadsheet_id
     );
 
+    info!("Verifying spreadsheet access with token: {}...", &token[..10]);
     let response = client
-        .post(&url)
+        .get(&url)
         .bearer_auth(&token)
-        .json(&add_sheet_request)
         .send()
-        .await;
+        .await?;
 
-    // If sheet already exists, that's fine
-    if let Err(e) = response {
-        if !e.to_string().contains("already exists") {
-            error!("Error creating sheet: {}", e);
-            return Err(Box::new(e));
-        }
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await?;
+        error!("Failed to access spreadsheet: {} - {}", status, error_text);
+        return Err(format!("Failed to access spreadsheet: {} - {}", status, error_text).into());
     }
 
-    // Now add headers
-    let range = format!("{}!A1:{}{}", sheet_name, (b'A' + (headers.len() - 1) as u8) as char, 1);
-    let url = format!(
-        "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW",
-        spreadsheet_id,
-        range
+    info!("Successfully verified spreadsheet access");
+    Ok(())
+}
+
+async fn create_sheet_if_not_exists(store: &SheetsStore, sheet_name: &str, headers: Vec<&str>) -> Result<(), Box<dyn Error>> {
+    let token = store.get_auth_token().await?;
+    let client = reqwest::Client::new();
+    
+    // First check if sheet exists
+    let metadata_url = format!(
+        "https://sheets.googleapis.com/v4/spreadsheets/{}?includeGridData=false",
+        store.config.spreadsheet_id
     );
 
-    let values = vec![headers.iter().map(|&s| s.to_string()).collect::<Vec<_>>()];
+    info!("Checking if sheet '{}' exists...", sheet_name);
+    let response = client
+        .get(&metadata_url)
+        .bearer_auth(&token)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await?;
+        return Err(format!("Failed to get spreadsheet info: {} - {}", status, error_text).into());
+    }
+
+    let spreadsheet_info: Value = response.json().await?;
+    let sheet_exists = spreadsheet_info["sheets"]
+        .as_array()
+        .and_then(|sheets| {
+            sheets.iter().find(|sheet| {
+                sheet["properties"]["title"].as_str() == Some(sheet_name)
+            })
+        })
+        .is_some();
+
+    if !sheet_exists {
+        info!("Creating new sheet '{}'...", sheet_name);
+        let batch_update_url = format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{}:batchUpdate",
+            store.config.spreadsheet_id
+        );
+
+        let add_sheet_request = json!({
+            "requests": [{
+                "addSheet": {
+                    "properties": {
+                        "title": sheet_name,
+                        "gridProperties": {
+                            "rowCount": 1000,
+                            "columnCount": headers.len(),
+                            "frozenRowCount": 1
+                        }
+                    }
+                }
+            }]
+        });
+
+        info!("Sending request to create sheet: {}", batch_update_url);
+        let response = client
+            .post(&batch_update_url)
+            .header("Content-Type", "application/json")
+            .bearer_auth(&token)
+            .json(&add_sheet_request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await?;
+            return Err(format!("Failed to create sheet: {} - {}", status, error_text).into());
+        }
+        
+        info!("Sheet created successfully");
+    } else {
+        info!("Sheet '{}' already exists", sheet_name);
+    }
+
+    // Now set the headers directly without clearing first
+    info!("Setting headers for '{}'...", sheet_name);
+    let update_url = format!(
+        "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}!A1:{}1",
+        store.config.spreadsheet_id,
+        sheet_name,
+        (b'A' + (headers.len() - 1) as u8) as char
+    );
+
     let body = json!({
-        "values": values,
+        "values": [headers],
+        "majorDimension": "ROWS"
     });
 
-    client
-        .put(&url)
+    let response = client
+        .put(&update_url)
+        .header("Content-Type", "application/json")
+        .query(&[("valueInputOption", "RAW")])
         .bearer_auth(token)
         .json(&body)
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
 
-    info!("Sheet '{}' setup complete", sheet_name);
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await?;
+        return Err(format!("Failed to update headers: {} - {}", status, error_text).into());
+    }
+
+    info!("Successfully set up sheet '{}'", sheet_name);
     Ok(())
 }
 
@@ -82,8 +150,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
     env_logger::init();
 
+    info!("Starting sheet setup process...");
+
     let spreadsheet_id = env::var("GOOGLE_SHEETS_ID")?;
     let sa_json = env::var("SERVICE_ACCOUNT_JSON")?;
+
+    info!("Using spreadsheet ID: {}", spreadsheet_id);
+    info!("Service account JSON path: {}", sa_json);
 
     let config = SheetsConfig {
         spreadsheet_id,
@@ -92,46 +165,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let store = SheetsStore::new(config);
 
-    // Create MarketCache sheet
-    create_sheet_if_not_exists(
-        &store,
-        "MarketCache",
-        vec![
+    // First verify we can access the spreadsheet
+    verify_spreadsheet_access(&store).await?;
+
+    // Setup sheets with headers
+    let sheets_to_create = [
+        ("MarketCache", vec![
             "timestamp_yahoo",
             "timestamp_ycharts",
             "daily_close_sp500_price",
             "current_sp500_price",
             "current_cape",
             "cape_period"
-        ],
-    ).await?;
-
-    // Create QuarterlyData sheet
-    create_sheet_if_not_exists(
-        &store,
-        "QuarterlyData",
-        vec![
+        ]),
+        ("QuarterlyData", vec![
             "quarter",
             "dividend",
             "eps_actual",
             "eps_estimated"
-        ],
-    ).await?;
-
-    // Create HistoricalData sheet
-    create_sheet_if_not_exists(
-        &store,
-        "HistoricalData",
-        vec![
+        ]),
+        ("HistoricalData", vec![
             "year",
             "sp500_price",
             "dividend",
             "eps",
             "cape"
-        ],
-    ).await?;
+        ])
+    ];
 
-    // Now load historical data from CSV
+    for (sheet_name, headers) in sheets_to_create.iter() {
+        create_sheet_if_not_exists(&store, sheet_name, headers.clone()).await?;
+    }
+
+    // Load and upload historical data
     info!("Loading historical data from CSV...");
     let file = File::open("data/stk_mkt.csv")?;
     let mut rdr = Reader::from_reader(file);
@@ -153,10 +219,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
-    info!("Uploading {} historical records...", historical_records.len());
-    for hr in historical_records {
-        store.update_historical_record(&hr).await?;
-    }
+    info!("Uploading {} historical records in bulk...", historical_records.len());
+    store.bulk_upload_historical_records(&historical_records).await?;
+    info!("Historical data upload complete!");
 
     info!("Sheet setup and data loading complete!");
     Ok(())
