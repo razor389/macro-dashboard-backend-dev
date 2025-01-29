@@ -7,11 +7,12 @@ use std::sync::Arc;
 use warp::Filter;
 use tokio_cron_scheduler::{JobScheduler, Job};
 use chrono_tz::US::Central;
-use chrono::{Utc, TimeZone, Datelike}; // Added Datelike trait
+use chrono::{Utc, TimeZone, Datelike};
 
 mod handlers;
 mod services;
 mod routes;
+mod models;
 
 #[tokio::main]
 async fn main() {
@@ -19,11 +20,12 @@ async fn main() {
     env_logger::init();
     info!("Logger initialized. Starting the application...");
 
-    // Initialize database connection
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let db = services::sheets::DbStore::new(&database_url)
+    // Initialize Google Sheets connection
+    let spreadsheet_id = env::var("GOOGLE_SHEETS_ID")
+        .expect("GOOGLE_SHEETS_ID must be set");
+    let db = services::db::DbStore::new(&spreadsheet_id)
         .await
-        .expect("Failed to connect to database");
+        .expect("Failed to initialize Google Sheets connection");
     let db = Arc::new(db);
     let db_clone = db.clone();
     let scheduler_db = db.clone();
@@ -51,7 +53,6 @@ async fn main() {
 
     // Start background service for immediate updates if needed
     tokio::spawn(async move {
-        // Check if we need to catch up on any missed updates
         let now = Utc::now();
         let central_now = now.with_timezone(&Central);
         let target = Central.ymd(central_now.year(), central_now.month(), central_now.day())

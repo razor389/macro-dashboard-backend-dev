@@ -5,7 +5,7 @@ use warp::Rejection;
 use crate::services::bls::fetch_inflation_data;
 use crate::services::treasury::fetch_tbill_data;
 use log::{info, error};
-use crate::services::sheets::DbStore;
+use crate::services::db::DbStore;
 
 pub async fn get_real_yield(_db: Arc<DbStore>) -> Result<Json, Rejection> {
     info!("Handling request to calculate real yield.");

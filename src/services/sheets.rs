@@ -1,8 +1,8 @@
+// src/services/sheets.rs
 use reqwest;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use crate::models::{MarketCache, QuarterlyData, HistoricalRecord};
 
 // Configuration struct for Google Sheets
 #[derive(Clone)]
@@ -29,30 +29,13 @@ impl Default for SheetNames {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MarketCache {
+pub struct RawMarketCache {
     pub timestamp_yahoo: String,
     pub timestamp_ycharts: String,
     pub daily_close_sp500_price: f64,
     pub current_sp500_price: f64,
     pub current_cape: f64,
     pub cape_period: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct QuarterlyData {
-    pub quarter: String,
-    pub dividend: Option<f64>,
-    pub eps_actual: Option<f64>,
-    pub eps_estimated: Option<f64>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HistoricalRecord {
-    pub year: i32,
-    pub sp500_price: f64,
-    pub dividend: f64,
-    pub eps: f64,
-    pub cape: f64,
 }
 
 pub struct SheetsStore {
@@ -70,7 +53,7 @@ impl SheetsStore {
         }
     }
 
-    pub async fn get_market_cache(&self) -> Result<MarketCache, Box<dyn Error>> {
+    pub async fn get_market_cache(&self) -> Result<RawMarketCache, Box<dyn Error>> {
         let range = format!("{}!A2:F2", self.sheet_names.market_cache);
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?key={}",
@@ -81,7 +64,7 @@ impl SheetsStore {
         
         if let Some(values) = response["values"].as_array() {
             if let Some(row) = values.first() {
-                return Ok(MarketCache {
+                return Ok(RawMarketCache {
                     timestamp_yahoo: row[0].as_str().unwrap_or("").to_string(),
                     timestamp_ycharts: row[1].as_str().unwrap_or("").to_string(),
                     daily_close_sp500_price: row[2].as_str().unwrap_or("0").parse()?,
@@ -95,7 +78,7 @@ impl SheetsStore {
         Err("No market cache data found".into())
     }
 
-    pub async fn update_market_cache(&self, cache: &MarketCache) -> Result<(), Box<dyn Error>> {
+    pub async fn update_market_cache(&self, cache: &RawMarketCache) -> Result<(), Box<dyn Error>> {
         let range = format!("{}!A2:F2", self.sheet_names.market_cache);
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW&key={}",

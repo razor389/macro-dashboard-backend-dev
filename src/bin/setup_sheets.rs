@@ -2,7 +2,7 @@
 use csv::Reader;
 use dotenv::dotenv;
 use std::{error::Error, fs::File};
-use macro_dashboard_acm::services::sheets::{SheetsStore, SheetsConfig, HistoricalRecord};
+use macro_dashboard_acm::sheets::{SheetsStore, SheetsConfig, HistoricalRecord};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

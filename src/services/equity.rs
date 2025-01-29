@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use chrono_tz::US::Central;
 
-use crate::services::db::{DbStore, HistoricalRecord};
+use crate::models::HistoricalRecord;
+
+use super::db::DbStore;
 
 #[derive(Debug, Serialize)]
 pub struct MarketData {
@@ -198,7 +200,7 @@ async fn fetch_ycharts_data() -> Result<YChartsData, Box<dyn Error>> {
     })
 }
 
-fn update_cache_from_ycharts(cache: &mut crate::services::db::MarketCache, ycharts_data: YChartsData) {
+fn update_cache_from_ycharts(cache: &mut crate::models::MarketCache, ycharts_data: YChartsData) {
     // Update quarterly dividends
     for (quarter, value) in ycharts_data.quarterly_dividends {
         cache.quarterly_dividends.insert(quarter, value);
@@ -217,7 +219,7 @@ fn update_cache_from_ycharts(cache: &mut crate::services::db::MarketCache, ychar
     cache.cape_period = ycharts_data.cape.1;
 }
 
-async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::services::db::MarketCache) -> Result<(), Box<dyn Error>> {
+async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::MarketCache) -> Result<(), Box<dyn Error>> {
     let current_year = Utc::now().year() as i32;
     let prev_year = current_year - 1;
     
