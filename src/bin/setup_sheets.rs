@@ -1,5 +1,4 @@
 //src/bin/setup_sheets.rs
-use csv::Reader;
 use dotenv::dotenv;
 use log::{info, error};
 use macro_dashboard_acm::models::HistoricalRecord;
@@ -199,29 +198,56 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Load and upload historical data
     info!("Loading historical data from CSV...");
-    let file = File::open("data/stk_mkt.csv")?;
-    let mut rdr = Reader::from_reader(file);
+    // Helper function to safely parse float values - fixed signature to use &str
+    fn parse_float(s: &str, field: &str) -> Result<f64, Box<dyn std::error::Error>> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Ok(0.0); // or whatever default value makes sense
+        }
+        trimmed.parse::<f64>().map_err(|e| {
+            format!("Error parsing {} value '{}': {}", field, trimmed, e).into()
+        })
+    }
 
+    let file = File::open("data/stk_mkt.csv")?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .flexible(true)
+        .from_reader(file);
+
+    let mut row_number = 0;
     let mut historical_records = Vec::new();
 
     for result in rdr.records() {
+        row_number += 1;
         let record = result?;
+        
+        // Skip header row
         if &record[0] == "Year" {
-            continue;  // Skip header row
+            continue;
         }
 
-        historical_records.push(HistoricalRecord {
-            year: record[0].trim().parse()?,
-            sp500_price: record[1].trim().parse()?,
-            dividend: record[2].trim().parse()?,
-            dividend_yield: record[3].trim().parse()?,
-            eps: record[4].trim().parse()?,
-            cape: record[5].trim().parse()?,
-            inflation: record[6].trim().parse()?,
-            total_return: record[7].trim().parse().unwrap_or(0.0),
-            cumulative_return: record[8].trim().parse()?,
-        });
+        // Log the current row being processed
+        info!("Processing row {}: {:?}", row_number, record);
+
+        let record_attempt = HistoricalRecord {
+            year: record[0].trim().parse().map_err(|e| {
+                format!("Error parsing year '{}': {}", &record[0], e)
+            })?,
+            sp500_price: parse_float(&record[1], "SP500 price")?,
+            dividend: parse_float(&record[2], "dividend")?,
+            dividend_yield: parse_float(&record[3], "dividend yield")?,
+            eps: parse_float(&record[4], "EPS")?,
+            cape: parse_float(&record[5], "CAPE")?,
+            inflation: parse_float(&record[6], "inflation")?,
+            total_return: parse_float(&record[7], "total return")?,
+            cumulative_return: parse_float(&record[8], "cumulative return")?,
+        };
+
+        historical_records.push(record_attempt);
     }
+
+    info!("Successfully parsed {} records", historical_records.len());
 
     info!("Uploading {} historical records in bulk...", historical_records.len());
     store.bulk_upload_historical_records(&historical_records).await?;
