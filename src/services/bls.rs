@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::env;
 use dotenv::dotenv;
 use std::error::Error as StdError;
+pub type Result<T> = std::result::Result<T, Box<dyn StdError + Send + Sync>>;
 use std::fmt;
 use log::{info, error};  // Import the logging macros
 
@@ -55,7 +56,7 @@ impl fmt::Display for DataFetchError {
 
 impl StdError for DataFetchError {}
 
-pub async fn fetch_inflation_data() -> Result<f64, Box<dyn StdError>> {
+pub async fn fetch_inflation_data() -> Result<f64> {
     dotenv().ok();  // Load environment variables from .env file
     
     let api_key = env::var("BLS_API_KEY").expect("BLS_API_KEY must be set");

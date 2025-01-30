@@ -2,9 +2,10 @@ use reqwest;
 use scraper::{Html, Selector};
 use log::{info, error};
 use chrono::{Utc, Datelike};
-use std::error::Error;
+use std::error::Error as StdError;
+pub type Result<T> = std::result::Result<T, Box<dyn StdError + Send + Sync>>;
 
-pub async fn fetch_tbill_data() -> Result<f64, Box<dyn Error>> {
+pub async fn fetch_tbill_data() -> Result<f64> {
     // Get the current year
     let current_year = Utc::now().year();
     let url = format!(
