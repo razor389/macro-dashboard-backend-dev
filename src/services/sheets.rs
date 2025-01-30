@@ -65,18 +65,18 @@ impl SheetsStore {
         let token = self.get_auth_token().await?;
         let client = reqwest::Client::new();
         
-        // Convert records to values maintaining exact CSV column order
+        // Convert records to values, using empty string for zero values
         let values: Vec<Vec<String>> = records.iter()
             .map(|record| vec![
                 record.year.to_string(),
-                record.sp500_price.to_string(),
-                record.dividend.to_string(),
-                record.dividend_yield.to_string(),
-                record.eps.to_string(),
-                record.cape.to_string(),
-                record.inflation.to_string(),
-                record.total_return.to_string(),
-                record.cumulative_return.to_string(),
+                if record.sp500_price == 0.0 { "".to_string() } else { record.sp500_price.to_string() },
+                if record.dividend == 0.0 { "".to_string() } else { record.dividend.to_string() },
+                if record.dividend_yield == 0.0 { "".to_string() } else { record.dividend_yield.to_string() },
+                if record.eps == 0.0 { "".to_string() } else { record.eps.to_string() },
+                if record.cape == 0.0 { "".to_string() } else { record.cape.to_string() },
+                if record.inflation == 0.0 { "".to_string() } else { record.inflation.to_string() },
+                if record.total_return == 0.0 { "".to_string() } else { record.total_return.to_string() },
+                if record.cumulative_return == 0.0 { "".to_string() } else { record.cumulative_return.to_string() },
             ])
             .collect();
     
@@ -256,7 +256,6 @@ impl SheetsStore {
     pub async fn get_historical_data(&self) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
     
-        // Range includes all columns A through I
         let range = format!("{}!A2:I", self.sheet_names.historical_data);
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
@@ -275,16 +274,25 @@ impl SheetsStore {
         let mut historical_data = Vec::new();
         if let Some(values) = response["values"].as_array() {
             for row in values {
+                // Helper function to parse optional float value
+                let parse_opt_float = |value: Option<&serde_json::Value>| -> f64 {
+                    value
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(0.0)
+                };
+    
                 historical_data.push(HistoricalRecord {
                     year: row.get(0).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    sp500_price: row.get(1).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    dividend: row.get(2).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    dividend_yield: row.get(3).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    eps: row.get(4).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    cape: row.get(5).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    inflation: row.get(6).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    total_return: row.get(7).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    cumulative_return: row.get(8).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    sp500_price: parse_opt_float(row.get(1)),
+                    dividend: parse_opt_float(row.get(2)),
+                    dividend_yield: parse_opt_float(row.get(3)),
+                    eps: parse_opt_float(row.get(4)),
+                    cape: parse_opt_float(row.get(5)),
+                    inflation: parse_opt_float(row.get(6)),
+                    total_return: parse_opt_float(row.get(7)),
+                    cumulative_return: parse_opt_float(row.get(8)),
                 });
             }
         }
@@ -293,14 +301,12 @@ impl SheetsStore {
     }
 
     pub async fn update_historical_record(&self, record: &HistoricalRecord) -> Result<(), Box<dyn Error>> {
-        // fetch all records to find the matching row
         let all_records = self.get_historical_data().await?;
         let row_index = all_records.iter().position(|r| r.year == record.year)
             .ok_or("Record not found")?;
     
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
     
-        // +2 because first row is headers
         let row_num = row_index + 2;
         let range = format!("{}!A{}:I{}", self.sheet_names.historical_data, row_num, row_num);
         let url = format!(
@@ -310,14 +316,14 @@ impl SheetsStore {
     
         let values = vec![vec![
             record.year.to_string(),
-            record.sp500_price.to_string(),
-            record.dividend.to_string(),
-            record.dividend_yield.to_string(),
-            record.eps.to_string(),
-            record.cape.to_string(),
-            record.inflation.to_string(),
-            record.total_return.to_string(),
-            record.cumulative_return.to_string(),
+            if record.sp500_price == 0.0 { "".to_string() } else { record.sp500_price.to_string() },
+            if record.dividend == 0.0 { "".to_string() } else { record.dividend.to_string() },
+            if record.dividend_yield == 0.0 { "".to_string() } else { record.dividend_yield.to_string() },
+            if record.eps == 0.0 { "".to_string() } else { record.eps.to_string() },
+            if record.cape == 0.0 { "".to_string() } else { record.cape.to_string() },
+            if record.inflation == 0.0 { "".to_string() } else { record.inflation.to_string() },
+            if record.total_return == 0.0 { "".to_string() } else { record.total_return.to_string() },
+            if record.cumulative_return == 0.0 { "".to_string() } else { record.cumulative_return.to_string() },
         ]];
     
         let body = json!({

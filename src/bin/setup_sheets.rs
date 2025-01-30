@@ -187,8 +187,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "year",
             "sp500_price",
             "dividend",
+            "dividend_yield",
             "eps",
-            "cape"
+            "cape",
+            "inflation",
+            "total_return",
+            "cumulative_return"
         ])
     ];
 
