@@ -65,30 +65,33 @@ impl SheetsStore {
         let token = self.get_auth_token().await?;
         let client = reqwest::Client::new();
         
-        // Convert records to values
+        // Convert records to values maintaining exact CSV column order
         let values: Vec<Vec<String>> = records.iter()
             .map(|record| vec![
                 record.year.to_string(),
                 record.sp500_price.to_string(),
                 record.dividend.to_string(),
+                record.dividend_yield.to_string(),
                 record.eps.to_string(),
                 record.cape.to_string(),
+                record.inflation.to_string(),
+                record.total_return.to_string(),
+                record.cumulative_return.to_string(),
             ])
             .collect();
-
-        // Define the range for all data (starting from A2 to accommodate headers)
-        let range = format!("{}!A2:E{}", self.sheet_names.historical_data, values.len() + 1);
+    
+        let range = format!("{}!A2:I{}", self.sheet_names.historical_data, values.len() + 1);
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
             self.config.spreadsheet_id,
             range
         );
-
+    
         let body = json!({
             "values": values,
             "majorDimension": "ROWS"
         });
-
+    
         let response = client
             .put(&url)
             .header("Content-Type", "application/json")
@@ -97,14 +100,14 @@ impl SheetsStore {
             .json(&body)
             .send()
             .await?;
-
+    
         if !response.status().is_success() {
             let error_text = response.text().await?;
             return Err(format!("Failed to upload historical records: {}", error_text).into());
         }
-
+    
         Ok(())
-    }
+    }    
 
     /// Example of reading from the "MarketCache!A2:F2" range
     pub async fn get_market_cache(&self) -> Result<RawMarketCache, Box<dyn Error>> {
@@ -250,16 +253,16 @@ impl SheetsStore {
         Ok(())
     }
 
-    /// Example of reading/writing the "HistoricalData!A2:E" for your HistoricalRecord
     pub async fn get_historical_data(&self) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
-
-        let range = format!("{}!A2:E", self.sheet_names.historical_data);
+    
+        // Range includes all columns A through I
+        let range = format!("{}!A2:I", self.sheet_names.historical_data);
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
             self.config.spreadsheet_id, range
         );
-
+    
         let response: serde_json::Value = self.client
             .get(&url)
             .bearer_auth(token)
@@ -268,26 +271,24 @@ impl SheetsStore {
             .error_for_status()?
             .json()
             .await?;
-
+    
         let mut historical_data = Vec::new();
         if let Some(values) = response["values"].as_array() {
             for row in values {
-                let year = row.get(0).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
-                let sp500_price = row.get(1).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
-                let dividend = row.get(2).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
-                let eps = row.get(3).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
-                let cape = row.get(4).and_then(|v| v.as_str()).unwrap_or("0").parse()?;
-
                 historical_data.push(HistoricalRecord {
-                    year,
-                    sp500_price,
-                    dividend,
-                    eps,
-                    cape,
+                    year: row.get(0).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    sp500_price: row.get(1).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    dividend: row.get(2).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    dividend_yield: row.get(3).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    eps: row.get(4).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    cape: row.get(5).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    inflation: row.get(6).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    total_return: row.get(7).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    cumulative_return: row.get(8).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
                 });
             }
         }
-
+    
         Ok(historical_data)
     }
 
@@ -296,38 +297,42 @@ impl SheetsStore {
         let all_records = self.get_historical_data().await?;
         let row_index = all_records.iter().position(|r| r.year == record.year)
             .ok_or("Record not found")?;
-
+    
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
-
-        // +2 offset: first row is headers
+    
+        // +2 because first row is headers
         let row_num = row_index + 2;
-        let range = format!("{}!A{}:E{}", self.sheet_names.historical_data, row_num, row_num);
+        let range = format!("{}!A{}:I{}", self.sheet_names.historical_data, row_num, row_num);
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW",
             self.config.spreadsheet_id, range
         );
-
+    
         let values = vec![vec![
             record.year.to_string(),
             record.sp500_price.to_string(),
             record.dividend.to_string(),
+            record.dividend_yield.to_string(),
             record.eps.to_string(),
             record.cape.to_string(),
+            record.inflation.to_string(),
+            record.total_return.to_string(),
+            record.cumulative_return.to_string(),
         ]];
-
+    
         let body = json!({
             "values": values,
         });
-
-        let resp = self.client
+    
+        let response = self.client
             .put(&url)
             .bearer_auth(token)
             .json(&body)
             .send()
             .await?
             .error_for_status()?;
-
-        info!("update_historical_record response: {:?}", resp);
+    
+        info!("update_historical_record response: {:?}", response);
         Ok(())
     }
 }

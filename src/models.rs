@@ -26,8 +26,12 @@ pub struct HistoricalRecord {
     pub year: i32,
     pub sp500_price: f64,
     pub dividend: f64,
+    pub dividend_yield: f64,
     pub eps: f64,
     pub cape: f64,
+    pub inflation: f64,
+    pub total_return: f64,
+    pub cumulative_return: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

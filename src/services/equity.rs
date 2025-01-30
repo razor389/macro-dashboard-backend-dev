@@ -230,8 +230,12 @@ async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::Mark
             year: prev_year,
             sp500_price: 0.0,
             dividend: 0.0,
+            dividend_yield: 0.0,
             eps: 0.0,
             cape: 0.0,
+            inflation: 0.0,
+            total_return: 0.0,
+            cumulative_return: 0.0
         }
     };
     

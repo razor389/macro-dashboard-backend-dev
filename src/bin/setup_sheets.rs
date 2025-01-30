@@ -207,22 +207,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for result in rdr.records() {
         let record = result?;
         if &record[0] == "Year" {
-            continue;
+            continue;  // Skip header row
         }
 
         historical_records.push(HistoricalRecord {
             year: record[0].trim().parse()?,
             sp500_price: record[1].trim().parse()?,
             dividend: record[2].trim().parse()?,
-            eps: record[4].trim().parse().unwrap_or(0.0),
+            dividend_yield: record[3].trim().parse()?,
+            eps: record[4].trim().parse()?,
             cape: record[5].trim().parse()?,
+            inflation: record[6].trim().parse()?,
+            total_return: record[7].trim().parse().unwrap_or(0.0),
+            cumulative_return: record[8].trim().parse()?,
         });
     }
 
     info!("Uploading {} historical records in bulk...", historical_records.len());
     store.bulk_upload_historical_records(&historical_records).await?;
     info!("Historical data upload complete!");
-
     info!("Sheet setup and data loading complete!");
     Ok(())
 }
