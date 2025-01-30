@@ -7,10 +7,9 @@ use std::collections::HashMap;
 pub struct Timestamps {
     pub yahoo_price: DateTime<Utc>,
     pub ycharts_data: DateTime<Utc>,
-    pub treasury_data: DateTime<Utc>,  // New
-    pub bls_data: DateTime<Utc>,       // New
+    pub treasury_data: DateTime<Utc>,  
+    pub bls_data: DateTime<Utc>,       
 }
-
 
 #[derive(Debug, Clone)]
 pub struct MarketCache {
@@ -22,10 +21,12 @@ pub struct MarketCache {
     pub eps_estimated: HashMap<String, f64>,
     pub current_cape: f64,
     pub cape_period: String,
-    pub tips_yield_20y: f64,        // New
-    pub bond_yield_20y: f64,        // New
-    pub tbill_yield: f64,          // New
-    pub inflation_rate: f64,        // New
+    pub tips_yield_20y: f64,        
+    pub bond_yield_20y: f64,        
+    pub tbill_yield: f64,          
+    pub inflation_rate: f64,  
+    pub latest_monthly_return: f64,
+    pub latest_month: String,      
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,4 +48,10 @@ pub struct QuarterlyData {
     pub dividend: Option<f64>,
     pub eps_actual: Option<f64>,
     pub eps_estimated: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonthlyData {
+    pub month: String,
+    pub total_return: f64,
 }

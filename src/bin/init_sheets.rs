@@ -6,6 +6,7 @@ use serde_json::Value;
 use chrono::Utc;
 use std::env;
 use log::{info, error};
+use macro_dashboard_acm::models::MonthlyData;
 
 use macro_dashboard_acm::services::{
     sheets::{SheetsStore, SheetsConfig, RawMarketCache},
@@ -14,6 +15,36 @@ use macro_dashboard_acm::services::{
     treasury_long::{fetch_20y_bond_yield, fetch_20y_tips_yield}
 };
 use macro_dashboard_acm::models::QuarterlyData;
+
+async fn initialize_monthly_data(store: &SheetsStore) -> Result<(), Box<dyn Error>> {
+    info!("Initializing monthly return data...");
+    
+    let init_data: Value = serde_json::from_str(
+        &fs::read_to_string("config/market_init.json")?
+    )?;
+
+    let mut monthly_data: Vec<MonthlyData> = Vec::new();  // Explicitly type the vector
+
+    if let Some(returns) = init_data["monthly_returns"].as_object() {
+        for (month, value) in returns {
+            if let Some(return_value) = value.as_f64() {
+                monthly_data.push(MonthlyData {
+                    month: month.clone(),
+                    total_return: return_value,
+                });
+            }
+        }
+    }
+
+    // Sort monthly data by date
+    monthly_data.sort_by(|a, b| a.month.cmp(&b.month));
+
+    info!("Uploading {} monthly records...", monthly_data.len());
+    store.update_monthly_data(&monthly_data[..]).await?;
+    info!("Monthly data initialized successfully");
+
+    Ok(())
+}
 
 async fn initialize_market_data() -> Result<RawMarketCache, Box<dyn Error>> {
     info!("Fetching initial market data...");
@@ -68,6 +99,28 @@ async fn initialize_market_data() -> Result<RawMarketCache, Box<dyn Error>> {
         }
     };
 
+    // -- Find the latest monthly return from config/market_init.json --
+    let (latest_month, latest_monthly_return) = if let Some(monthly_returns) = init_data["monthly_returns"].as_object() {
+        // Convert to a vec of (String, f64) so we can sort
+        let mut pairs: Vec<(String, f64)> = monthly_returns.iter()
+            .filter_map(|(m, val)| val.as_f64().map(|r| (m.clone(), r)))
+            .collect();
+
+        // Sort by month key "YYYY-MM"
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Last element is the "latest"
+        if let Some((m, r)) = pairs.last() {
+            (m.clone(), *r)
+        } else {
+            // Fallback default if no data
+            ("".to_string(), 0.0)
+        }
+    } else {
+        // Fallback default if JSON is missing monthly_returns
+        ("".to_string(), 0.0)
+    };
+
     let now = Utc::now().to_rfc3339();
 
     Ok(RawMarketCache {
@@ -83,6 +136,8 @@ async fn initialize_market_data() -> Result<RawMarketCache, Box<dyn Error>> {
         bond_yield_20y,
         tbill_yield,
         inflation_rate,
+        latest_monthly_return,
+        latest_month,
     })
 }
 
@@ -171,6 +226,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Updating quarterly data...");
     store.update_quarterly_data(&quarterly_data).await?;
 
+    initialize_monthly_data(&store).await?;
+    
     info!("Sheet initialization complete!");
     Ok(())
 }

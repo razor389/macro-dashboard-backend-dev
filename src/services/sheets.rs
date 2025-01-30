@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use crate::{models::QuarterlyData, services::google_oauth::fetch_access_token_from_file};
+use crate::{models::{MonthlyData, QuarterlyData}, services::google_oauth::fetch_access_token_from_file};
 use log::info;
 use serde_json::json;
 use reqwest::Client;
@@ -36,16 +36,18 @@ impl Default for SheetNames {
 pub struct RawMarketCache {
     pub timestamp_yahoo: String,
     pub timestamp_ycharts: String,
-    pub timestamp_treasury: String,  // New: timestamp for treasury data
-    pub timestamp_bls: String,      // New: timestamp for BLS data
+    pub timestamp_treasury: String,
+    pub timestamp_bls: String,
     pub daily_close_sp500_price: f64,
     pub current_sp500_price: f64,
     pub current_cape: f64,
     pub cape_period: String,
-    pub tips_yield_20y: f64,        // New: 20yr TIPS yield
-    pub bond_yield_20y: f64,        // New: 20yr bond yield
-    pub tbill_yield: f64,          // New: T-bill yield
-    pub inflation_rate: f64,        // New: inflation rate
+    pub tips_yield_20y: f64,
+    pub bond_yield_20y: f64,
+    pub tbill_yield: f64,
+    pub inflation_rate: f64,
+    pub latest_monthly_return: f64,    
+    pub latest_month: String,          
 }
 
 pub struct SheetsStore {
@@ -115,16 +117,16 @@ impl SheetsStore {
         Ok(())
     }    
 
-    /// Example of reading from the "MarketCache!A2:F2" range
     pub async fn get_market_cache(&self) -> Result<RawMarketCache, Box<dyn Error>> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
-
-        let range = format!("{}!A2:L2", self.sheet_names.market_cache);  // Updated range
+    
+        // Update range to include new columns
+        let range = format!("{}!A2:N2", self.sheet_names.market_cache);
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
             self.config.spreadsheet_id, range
         );
-
+    
         let response: serde_json::Value = self.client
             .get(&url)
             .bearer_auth(token)
@@ -133,7 +135,7 @@ impl SheetsStore {
             .error_for_status()?
             .json()
             .await?;
-
+    
         if let Some(values) = response["values"].as_array() {
             if let Some(row) = values.first() {
                 return Ok(RawMarketCache {
@@ -149,22 +151,24 @@ impl SheetsStore {
                     bond_yield_20y: row.get(9).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
                     tbill_yield: row.get(10).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
                     inflation_rate: row.get(11).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    latest_monthly_return: row.get(12).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    latest_month: row.get(13).and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 });
             }
         }
-
+    
         Err("No market cache data found".into())
-    }
+    }    
 
     pub async fn update_market_cache(&self, cache: &RawMarketCache) -> Result<(), Box<dyn Error>> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
-
-        let range = format!("{}!A2:L2", self.sheet_names.market_cache);  // Updated range
+    
+        let range = format!("{}!A2:N2", self.sheet_names.market_cache);
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW",
             self.config.spreadsheet_id, range
         );
-
+    
         let values = vec![vec![
             cache.timestamp_yahoo.to_string(),
             cache.timestamp_ycharts.to_string(),
@@ -178,21 +182,22 @@ impl SheetsStore {
             cache.bond_yield_20y.to_string(),
             cache.tbill_yield.to_string(),
             cache.inflation_rate.to_string(),
+            cache.latest_monthly_return.to_string(),
+            cache.latest_month.clone(),
         ]];
-
+    
         let body = json!({
             "values": values,
         });
-
-        let resp = self.client
+    
+        self.client
             .put(&url)
             .bearer_auth(token)
             .json(&body)
             .send()
             .await?
             .error_for_status()?;
-
-        info!("update_market_cache response: {:?}", resp);
+    
         Ok(())
     }
 
@@ -265,6 +270,71 @@ impl SheetsStore {
             .error_for_status()?;
 
         info!("update_quarterly_data response: {:?}", resp);
+        Ok(())
+    }
+
+    pub async fn get_monthly_data(&self) -> Result<Vec<MonthlyData>, Box<dyn Error>> {
+        let token = self.get_auth_token().await?;
+        let range = format!("{}!A2:B", "MonthlyData");
+        let url = format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
+            self.config.spreadsheet_id, range
+        );
+
+        let response: serde_json::Value = self.client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let mut monthly_data = Vec::new();
+        if let Some(values) = response["values"].as_array() {
+            for row in values {
+                let month = row.get(0).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let total_return = row.get(1)
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+
+                monthly_data.push(MonthlyData {
+                    month,
+                    total_return,
+                });
+            }
+        }
+        Ok(monthly_data)
+    }
+
+    pub async fn update_monthly_data(&self, data: &[MonthlyData]) -> Result<(), Box<dyn Error>> {
+        let token = self.get_auth_token().await?;
+        let range = format!("{}!A2:B{}", "MonthlyData", data.len() + 1);
+        let url = format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW",
+            self.config.spreadsheet_id, range
+        );
+
+        let values: Vec<Vec<String>> = data.iter().map(|row| {
+            vec![
+                row.month.clone(),
+                row.total_return.to_string(),
+            ]
+        }).collect();
+
+        let body = json!({
+            "values": values,
+        });
+
+        self.client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
         Ok(())
     }
 

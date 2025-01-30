@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use chrono_tz::US::Central;
 
-use crate::models::HistoricalRecord;
+use crate::models::{HistoricalRecord, MonthlyData};
 
 use super::db::DbStore;
 
@@ -38,6 +38,7 @@ struct YChartsData {
     eps_actual: HashMap<String, f64>,
     eps_estimated: HashMap<String, f64>,
     cape: (f64, String), // (value, period)
+    monthly_return: Option<(String, f64)>, // (period, value)
 }
 
 async fn get_quarterly_calculations(db: &Arc<DbStore>) -> Result<(Option<QuarterlyValue>, Option<QuarterlyValue>, Option<QuarterlyValue>), Box<dyn Error>> {
@@ -135,6 +136,7 @@ async fn get_quarterly_calculations(db: &Arc<DbStore>) -> Result<(Option<Quarter
 
     Ok((ttm_dividend, latest_eps_actual, estimated_eps_sum))
 }
+
 pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Error>> {
     let mut cache = db.get_market_cache().await?;
     let mut data_updated = false;
@@ -265,6 +267,7 @@ async fn fetch_ycharts_data() -> Result<YChartsData, Box<dyn Error>> {
     let mut eps_actual = HashMap::new();
     let mut eps_estimated = HashMap::new();
     let mut cape = (0.0, String::new());
+    let mut monthly_return = None;
 
     // Fetch quarterly dividend
     if let Ok((quarter, value)) = fetch_ycharts_value(
@@ -294,11 +297,20 @@ async fn fetch_ycharts_data() -> Result<YChartsData, Box<dyn Error>> {
         cape = (value, period);
     }
 
+    // Fetch monthly return
+    if let Ok((period, value)) = fetch_ycharts_value(
+        "https://ycharts.com/indicators/sp_500_monthly_total_return"
+    ).await {
+        // Convert percentage to decimal
+        monthly_return = Some((period, value / 100.0));
+    }
+
     Ok(YChartsData {
         quarterly_dividends,
         eps_actual,
         eps_estimated,
         cape,
+        monthly_return,
     })
 }
 
@@ -315,6 +327,11 @@ fn update_cache_from_ycharts(cache: &mut crate::models::MarketCache, ycharts_dat
     
     for (quarter, value) in ycharts_data.eps_estimated {
         cache.eps_estimated.insert(quarter, value);
+    }
+
+    if let Some((month, return_value)) = ycharts_data.monthly_return {
+        cache.latest_month = month;
+        cache.latest_monthly_return = return_value;
     }
     
     cache.current_cape = ycharts_data.cape.0;
@@ -382,6 +399,14 @@ async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::Mark
         }
     }
 
+    // Check if we have complete monthly data for the previous year
+    let monthly_data = db.sheets_store.get_monthly_data().await?;
+    if let Some(yearly_return) = compute_yearly_return(&monthly_data, prev_year) {
+        historical_record.total_return = yearly_return;
+        updates_needed = true;
+        info!("Updated historical total return for {}: {}", prev_year, yearly_return);
+    }
+
     // Check if we have a December CAPE value
     if cache.cape_period == format!("Dec {}", prev_year) {
         historical_record.cape = cache.current_cape;
@@ -418,4 +443,20 @@ pub async fn get_historical_data_range(
     Ok(all_data.into_iter()
         .filter(|record| record.year >= start_year && record.year <= end_year)
         .collect())
+}
+
+fn compute_yearly_return(monthly_data: &[MonthlyData], year: i32) -> Option<f64> {
+    let year_prefix = format!("{}-", year);
+    let year_returns: Vec<f64> = monthly_data.iter()
+        .filter(|data| data.month.starts_with(&year_prefix))
+        .map(|data| data.total_return)
+        .collect();
+
+    if year_returns.len() == 12 {
+        // Compute compound return: (1 + r1) * (1 + r2) * ... * (1 + r12) - 1
+        Some(year_returns.iter()
+            .fold(1.0, |acc, &r| acc * (1.0 + r)) - 1.0)
+    } else {
+        None
+    }
 }

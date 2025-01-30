@@ -33,6 +33,13 @@
         "eps_actual",
         "eps_estimated"
       ]
+    },
+    "monthly_data": {
+      "name": "MonthlyData",
+      "columns": [
+          "month",
+          "total_return"
+      ]
     }
   }
 }

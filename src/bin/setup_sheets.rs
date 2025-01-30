@@ -181,7 +181,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "tips_yield_20y",
             "bond_yield_20y",
             "tbill_yield",
-            "inflation_rate"
+            "inflation_rate",
+            "latest_monthly_return",
+            "latest_return_month"
         ]),
         ("QuarterlyData", vec![
             "quarter",
@@ -205,6 +207,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (sheet_name, headers) in sheets_to_create.iter() {
         create_sheet_if_not_exists(&store, sheet_name, headers.clone()).await?;
     }
+    create_sheet_if_not_exists(&store, "MonthlyData", vec![
+        "month",
+        "total_return"
+    ]).await?;
 
     // Load and upload historical data
     info!("Loading historical data from CSV...");

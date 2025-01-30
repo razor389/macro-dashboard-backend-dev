@@ -48,6 +48,8 @@ impl DbStore {
             bond_yield_20y: raw_cache.bond_yield_20y,
             tbill_yield: raw_cache.tbill_yield,
             inflation_rate: raw_cache.inflation_rate,
+            latest_monthly_return: raw_cache.latest_monthly_return,  // Added
+            latest_month: raw_cache.latest_month,                    // Added
         })
     }
 
@@ -65,12 +67,13 @@ impl DbStore {
             bond_yield_20y: cache.bond_yield_20y,
             tbill_yield: cache.tbill_yield,
             inflation_rate: cache.inflation_rate,
+            latest_monthly_return: cache.latest_monthly_return,  // Added
+            latest_month: cache.latest_month.clone(),           // Added
         };
 
         self.sheets_store.update_market_cache(&raw_cache).await?;
         Ok(())
     }
-
 
     pub async fn get_historical_data(&self) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {
         self.sheets_store.get_historical_data().await
