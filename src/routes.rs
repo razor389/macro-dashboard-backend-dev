@@ -6,12 +6,7 @@ use serde_json::json;
 use log::{info, error, debug};
 
 use crate::handlers::{
-    equity::{get_equity_data, get_equity_history, get_equity_history_range},
-    inflation::get_inflation,
-    tbill::get_tbill,
-    real_yield::get_real_yield,
-    long_term::get_long_term_rates,
-    error::ApiError
+    equity::{get_equity_data, get_equity_history, get_equity_history_range, get_market_metrics}, error::ApiError, inflation::get_inflation, long_term::get_long_term_rates, real_yield::get_real_yield, tbill::get_tbill
 };
 use crate::services::db::DbStore;
 
@@ -120,6 +115,15 @@ fn equity_history_range_route(
         .and_then(get_equity_history_range)
 }
 
+fn market_metrics_route(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("api" / "v1" / "equity" / "metrics")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(get_market_metrics)
+}
+
 /// Combine all routes into a single API
 pub fn routes(db: Arc<DbStore>) -> impl Filter<Extract = impl Reply, Error = Infallible> + Clone {
     info!("Configuring routes...");
@@ -147,7 +151,8 @@ pub fn routes(db: Arc<DbStore>) -> impl Filter<Extract = impl Reply, Error = Inf
         .or(long_term_route(db.clone()))
         .or(equity_route(db.clone()))
         .or(equity_history_route(db.clone()))
-        .or(equity_history_range_route(db.clone()));
+        .or(equity_history_range_route(db.clone()))
+        .or(market_metrics_route(db.clone())); 
 
     // Add logging, CORS and error handling
     let api = api

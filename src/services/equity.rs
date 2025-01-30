@@ -12,7 +12,7 @@ use chrono_tz::US::Central;
 
 use crate::models::{HistoricalRecord, MonthlyData};
 
-use super::db::DbStore;
+use super::{calculations::{calculate_market_metrics, MarketMetrics}, db::DbStore};
 
 #[derive(Debug, Serialize)]
 pub struct QuarterlyValue {
@@ -342,7 +342,7 @@ async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::Mark
     let current_year = Utc::now().year() as i32;
     let prev_year = current_year - 1;
     
-    // Try to get existing record or create new one
+    // Get existing record or create new one
     let mut historical_record = match db.get_historical_year(prev_year).await? {
         Some(record) => record,
         None => HistoricalRecord {
@@ -399,6 +399,17 @@ async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::Mark
         }
     }
 
+    // Check for year change since last Yahoo price update
+    let last_update = cache.timestamps.yahoo_price.naive_utc().date();
+    let current_date = Utc::now().naive_utc().date();
+    
+    if last_update.year() < current_date.year() && cache.daily_close_sp500_price > 0.0 {
+        historical_record.sp500_price = cache.daily_close_sp500_price;
+        updates_needed = true;
+        info!("Updated historical closing price for {} based on year change: {}", 
+              prev_year, cache.daily_close_sp500_price);
+    }
+
     // Check if we have complete monthly data for the previous year
     let monthly_data = db.sheets_store.get_monthly_data().await?;
     if let Some(yearly_return) = compute_yearly_return(&monthly_data, prev_year) {
@@ -414,20 +425,21 @@ async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::Mark
         info!("Updated historical CAPE for {}: {}", prev_year, cache.current_cape);
     }
 
-    // If it's December 31st at market close, update the yearly closing price
-    let ct = Utc::now().with_timezone(&chrono_tz::US::Central);
-    if ct.month() == 12 && ct.day() == 31 && should_update_daily() {
-        historical_record.sp500_price = cache.daily_close_sp500_price;
-        updates_needed = true;
-        info!("Updated historical closing price for {}: {}", prev_year, cache.daily_close_sp500_price);
-    }
-
     if updates_needed {
+        if historical_record.sp500_price > 0.0 && historical_record.dividend > 0.0 {
+            historical_record.dividend_yield = historical_record.dividend / historical_record.sp500_price;
+        }
+        
         db.update_historical_record(historical_record).await?;
         info!("Successfully updated historical record for {}", prev_year);
     }
 
     Ok(())
+}
+
+pub async fn get_market_metrics(db: &Arc<DbStore>) -> Result<MarketMetrics, Box<dyn Error>> {
+    let historical_data = db.get_historical_data().await?;
+    calculate_market_metrics(&historical_data)
 }
 
 pub async fn get_historical_data(db: &Arc<DbStore>) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {

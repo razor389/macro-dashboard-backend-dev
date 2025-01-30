@@ -5,3 +5,4 @@ pub mod equity;
 pub mod sheets;
 pub mod db;
 pub mod google_oauth;
+pub mod calculations;
