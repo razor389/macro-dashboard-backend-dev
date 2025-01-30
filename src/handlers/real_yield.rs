@@ -1,38 +1,28 @@
 // src/handlers/real_yield.rs
-use std::sync::Arc;
 use warp::reply::Json;
 use warp::Rejection;
-use crate::services::bls::fetch_inflation_data;
-use crate::services::treasury::fetch_tbill_data;
-use log::{info, error};
+use std::sync::Arc;
 use crate::services::db::DbStore;
+use super::error::ApiError;
+use log::{info, error};
 
-pub async fn get_real_yield(_db: Arc<DbStore>) -> Result<Json, Rejection> {
-    info!("Handling request to calculate real yield.");
+pub async fn get_real_yield(db: Arc<DbStore>) -> Result<Json, Rejection> {
+    info!("Handling request to calculate real yield");
 
-    let inflation = match fetch_inflation_data().await {
-        Ok(inflation_rate) => {
-            info!("Successfully fetched inflation rate: {}", inflation_rate);
-            inflation_rate
-        }
-        Err(e) => {
-            error!("Failed to fetch inflation rate: {}", e);
-            return Err(warp::reject::not_found());
-        }
-    };
+    let cache = db.get_market_cache().await.map_err(|e| {
+        error!("Database error: {}", e);
+        warp::reject::custom(ApiError::database_error(e.to_string()))
+    })?;
 
-    let tbill_rate = match fetch_tbill_data().await {
-        Ok(rate) => {
-            info!("Successfully fetched T-bill rate: {}", rate);
-            rate
-        }
-        Err(e) => {
-            error!("Failed to fetch T-bill rate: {}", e);
-            return Err(warp::reject::not_found());
-        }
-    };
+    // Check if we have both required values
+    if cache.tbill_yield == 0.0 || cache.inflation_rate == 0.0 {
+        error!("Missing required data for real yield calculation");
+        return Err(warp::reject::custom(ApiError::cache_error(
+            "Missing required T-bill or inflation data".to_string()
+        )));
+    }
 
-    let real_yield = tbill_rate - inflation;
+    let real_yield = cache.tbill_yield - cache.inflation_rate;
     info!("Calculated real yield: {}", real_yield);
 
     Ok(warp::reply::json(&real_yield))

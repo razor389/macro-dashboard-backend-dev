@@ -1,88 +1,149 @@
 // src/routes.rs
 use std::sync::Arc;
-use warp::reject::Rejection;
-use crate::handlers::{equity::get_equity_data, equity::get_equity_history, equity::get_equity_history_range, inflation::get_inflation, 
-                     long_term::get_long_term_rates, real_yield::get_real_yield, 
-                     tbill::get_tbill};
-use crate::services::db::DbStore;
-use log::info;
-
 use std::convert::Infallible;
-use warp::{Filter, Reply};
-use crate::handlers::error::ApiError;
+use warp::{Filter, Reply, Rejection};
+use serde_json::json;
+use log::{info, error};
 
-// Add recovery handling for our custom errors
+use crate::handlers::{
+    equity::{get_equity_data, get_equity_history, get_equity_history_range},
+    inflation::get_inflation,
+    tbill::get_tbill,
+    real_yield::get_real_yield,
+    long_term::get_long_term_rates,
+    error::ApiError
+};
+use crate::services::db::DbStore;
+
+/// Helper function to clone the db reference for each route
+fn with_db(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = (Arc<DbStore>,), Error = Infallible> + Clone {
+    warp::any().map(move || db.clone())
+}
+
+/// Handle all types of rejections that our API might encounter
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
-    let code;
-    let message;
-
-    if err.is_not_found() {
-        code = warp::http::StatusCode::NOT_FOUND;
-        message = "Not Found";
+    let (code, message) = if err.is_not_found() {
+        (warp::http::StatusCode::NOT_FOUND, "Not Found".to_string())
     } else if let Some(api_error) = err.find::<ApiError>() {
-        code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;
-        message = &api_error.message;
+        let code = match api_error {
+            ApiError::DatabaseError(_) => warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::ExternalServiceError(_) => warp::http::StatusCode::BAD_GATEWAY,
+            ApiError::CacheError(_) => warp::http::StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::ParseError(_) => warp::http::StatusCode::BAD_REQUEST,
+        };
+        (code, api_error.to_string())
     } else {
-        code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;
-        message = "Internal Server Error";
-    }
+        error!("Unhandled rejection: {:?}", err);
+        (
+            warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal Server Error".to_string(),
+        )
+    };
 
     Ok(warp::reply::with_status(
-        warp::reply::json(&serde_json::json!({
+        warp::reply::json(&json!({
             "error": message,
         })),
         code,
     ))
 }
 
+/// Set up inflation route
+fn inflation_route(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("api" / "v1" / "inflation")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(get_inflation)
+}
+
+/// Set up T-bill route
+fn tbill_route(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("api" / "v1" / "tbill")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(get_tbill)
+}
+
+/// Set up real yield route
+fn real_yield_route(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("api" / "v1" / "real_yield")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(get_real_yield)
+}
+
+/// Set up long-term rates route
+fn long_term_route(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("api" / "v1" / "long_term_rates")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(get_long_term_rates)
+}
+
+/// Set up equity route
+fn equity_route(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("api" / "v1" / "equity")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(get_equity_data)
+}
+
+/// Set up equity history route
+fn equity_history_route(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("api" / "v1" / "equity" / "history" / "all")
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(get_equity_history)
+}
+
+/// Set up equity history range route
+fn equity_history_range_route(
+    db: Arc<DbStore>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("api" / "v1" / "equity" / "history" / i32 / i32)
+        .and(warp::get())
+        .and(with_db(db))
+        .and_then(get_equity_history_range)
+}
+
+/// Combine all routes into a single API
 pub fn routes(db: Arc<DbStore>) -> impl Filter<Extract = impl Reply, Error = Infallible> + Clone {
     info!("Configuring routes...");
 
-    let db_filter = warp::any().map(move || db.clone());
+    // Set up CORS
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_headers(vec!["content-type"])
+        .allow_methods(vec!["GET", "POST", "PUT", "DELETE"]);
 
-    let inflation_route = warp::path!("api" / "v1" / "inflation")
-        .and(warp::get())
-        .and(db_filter.clone())
-        .and_then(get_inflation);
+    // Combine all routes
+    let api = inflation_route(db.clone())
+        .or(tbill_route(db.clone()))
+        .or(real_yield_route(db.clone()))
+        .or(long_term_route(db.clone()))
+        .or(equity_route(db.clone()))
+        .or(equity_history_route(db.clone()))
+        .or(equity_history_range_route(db.clone()));
 
-    let tbill_route = warp::path!("api" / "v1" / "tbill")
-        .and(warp::get())
-        .and(db_filter.clone())
-        .and_then(get_tbill);
+    // Add CORS and error handling
+    let api = api
+        .with(cors)
+        .recover(handle_rejection);
 
-    let real_yield_route = warp::path!("api" / "v1" / "real_yield")
-        .and(warp::get())
-        .and(db_filter.clone())
-        .and_then(get_real_yield);
-
-    let long_term_route = warp::path!("api" / "v1" / "long_term_rates")
-        .and(warp::get())
-        .and(db_filter.clone())
-        .and_then(get_long_term_rates);
-
-    let equity_route = warp::path!("api" / "v1" / "equity")
-        .and(warp::get())
-        .and(db_filter.clone())
-        .and_then(get_equity_data);
-    
-    let equity_history_route = warp::path!("api" / "v1" / "equity" / "history" / "all")
-        .and(warp::get())
-        .and(db_filter.clone())
-        .and_then(get_equity_history);
-
-    let equity_history_range_route = warp::path!("api" / "v1" / "equity" / "history" / i32 / i32)
-        .and(warp::get())
-        .and(db_filter.clone())
-        .and_then(get_equity_history_range);
-    
     info!("All routes configured successfully.");
-
-    inflation_route
-        .or(tbill_route)
-        .or(real_yield_route)
-        .or(long_term_route)
-        .or(equity_route)
-        .or(equity_history_route)
-        .or(equity_history_range_route)
-        .recover(handle_rejection)
+    api
 }
