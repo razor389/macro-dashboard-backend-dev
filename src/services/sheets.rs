@@ -36,10 +36,16 @@ impl Default for SheetNames {
 pub struct RawMarketCache {
     pub timestamp_yahoo: String,
     pub timestamp_ycharts: String,
+    pub timestamp_treasury: String,  // New: timestamp for treasury data
+    pub timestamp_bls: String,      // New: timestamp for BLS data
     pub daily_close_sp500_price: f64,
     pub current_sp500_price: f64,
     pub current_cape: f64,
     pub cape_period: String,
+    pub tips_yield_20y: f64,        // New: 20yr TIPS yield
+    pub bond_yield_20y: f64,        // New: 20yr bond yield
+    pub tbill_yield: f64,          // New: T-bill yield
+    pub inflation_rate: f64,        // New: inflation rate
 }
 
 pub struct SheetsStore {
@@ -111,16 +117,14 @@ impl SheetsStore {
 
     /// Example of reading from the "MarketCache!A2:F2" range
     pub async fn get_market_cache(&self) -> Result<RawMarketCache, Box<dyn Error>> {
-        // 1. Fetch a token from the JSON
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
 
-        let range = format!("{}!A2:F2", self.sheet_names.market_cache);
+        let range = format!("{}!A2:L2", self.sheet_names.market_cache);  // Updated range
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}",
             self.config.spreadsheet_id, range
         );
 
-        // 2. Bearer auth
         let response: serde_json::Value = self.client
             .get(&url)
             .bearer_auth(token)
@@ -135,10 +139,16 @@ impl SheetsStore {
                 return Ok(RawMarketCache {
                     timestamp_yahoo: row.get(0).and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     timestamp_ycharts: row.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    daily_close_sp500_price: row.get(2).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    current_sp500_price: row.get(3).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    current_cape: row.get(4).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
-                    cape_period: row.get(5).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    timestamp_treasury: row.get(2).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    timestamp_bls: row.get(3).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    daily_close_sp500_price: row.get(4).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    current_sp500_price: row.get(5).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    current_cape: row.get(6).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    cape_period: row.get(7).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    tips_yield_20y: row.get(8).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    bond_yield_20y: row.get(9).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    tbill_yield: row.get(10).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
+                    inflation_rate: row.get(11).and_then(|v| v.as_str()).unwrap_or("0").parse()?,
                 });
             }
         }
@@ -146,11 +156,10 @@ impl SheetsStore {
         Err("No market cache data found".into())
     }
 
-    /// Example of updating the "MarketCache!A2:F2" range
     pub async fn update_market_cache(&self, cache: &RawMarketCache) -> Result<(), Box<dyn Error>> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
 
-        let range = format!("{}!A2:F2", self.sheet_names.market_cache);
+        let range = format!("{}!A2:L2", self.sheet_names.market_cache);  // Updated range
         let url = format!(
             "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=RAW",
             self.config.spreadsheet_id, range
@@ -159,10 +168,16 @@ impl SheetsStore {
         let values = vec![vec![
             cache.timestamp_yahoo.to_string(),
             cache.timestamp_ycharts.to_string(),
+            cache.timestamp_treasury.to_string(),
+            cache.timestamp_bls.to_string(),
             cache.daily_close_sp500_price.to_string(),
             cache.current_sp500_price.to_string(),
             cache.current_cape.to_string(),
             cache.cape_period.clone(),
+            cache.tips_yield_20y.to_string(),
+            cache.bond_yield_20y.to_string(),
+            cache.tbill_yield.to_string(),
+            cache.inflation_rate.to_string(),
         ]];
 
         let body = json!({

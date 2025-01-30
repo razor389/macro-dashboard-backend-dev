@@ -172,10 +172,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ("MarketCache", vec![
             "timestamp_yahoo",
             "timestamp_ycharts",
+            "timestamp_treasury",
+            "timestamp_bls",
             "daily_close_sp500_price",
             "current_sp500_price",
             "current_cape",
-            "cape_period"
+            "cape_period",
+            "tips_yield_20y",
+            "bond_yield_20y",
+            "tbill_yield",
+            "inflation_rate"
         ]),
         ("QuarterlyData", vec![
             "quarter",

@@ -33,10 +33,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let market_cache = RawMarketCache {
         timestamp_yahoo: Utc::now().to_rfc3339(),
         timestamp_ycharts: Utc::now().to_rfc3339(),
+        timestamp_treasury: Utc::now().to_rfc3339(),
+        timestamp_bls: Utc::now().to_rfc3339(),
         daily_close_sp500_price: 0.0,
         current_sp500_price: 0.0,
         current_cape: init_data["cape"]["value"].as_f64().unwrap(),
         cape_period: init_data["cape"]["period"].as_str().unwrap().to_string(),
+        tips_yield_20y: 0.0,
+        bond_yield_20y: 0.0,
+        tbill_yield: 0.0,
+        inflation_rate: 0.0,
     };
 
     store.update_market_cache(&market_cache).await?;
