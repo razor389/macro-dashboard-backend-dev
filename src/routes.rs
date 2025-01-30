@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::convert::Infallible;
 use warp::{Filter, Reply, Rejection};
 use serde_json::json;
-use log::{info, error};
+use log::{info, error, debug};
 
 use crate::handlers::{
     equity::{get_equity_data, get_equity_history, get_equity_history_range},
@@ -124,14 +124,24 @@ fn equity_history_range_route(
 pub fn routes(db: Arc<DbStore>) -> impl Filter<Extract = impl Reply, Error = Infallible> + Clone {
     info!("Configuring routes...");
 
-    // Set up CORS
+    // Set up CORS with more permissive settings
     let cors = warp::cors()
         .allow_any_origin()
-        .allow_headers(vec!["content-type"])
-        .allow_methods(vec!["GET", "POST", "PUT", "DELETE"]);
+        .allow_headers(vec!["Content-Type", "Authorization", "Accept"])
+        .allow_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+        .max_age(3600);
+
+    // Health check route
+    let health_route = warp::path!("health")
+        .and(warp::get())
+        .map(|| {
+            debug!("Health check requested");
+            warp::reply::json(&json!({"status": "ok"}))
+        });
 
     // Combine all routes
-    let api = inflation_route(db.clone())
+    let api = health_route
+        .or(inflation_route(db.clone()))
         .or(tbill_route(db.clone()))
         .or(real_yield_route(db.clone()))
         .or(long_term_route(db.clone()))
@@ -139,8 +149,9 @@ pub fn routes(db: Arc<DbStore>) -> impl Filter<Extract = impl Reply, Error = Inf
         .or(equity_history_route(db.clone()))
         .or(equity_history_range_route(db.clone()));
 
-    // Add CORS and error handling
+    // Add logging, CORS and error handling
     let api = api
+        .with(warp::log("macro_dashboard_acm::api"))
         .with(cors)
         .recover(handle_rejection);
 

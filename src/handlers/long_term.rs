@@ -1,29 +1,30 @@
 // src/handlers/long_term.rs
-use warp::reply::Json;
+use warp::reply::with_status;
 use warp::Rejection;
-use serde::Serialize;
 use std::sync::Arc;
 use crate::handlers::error::ApiError;
 use crate::services::db::DbStore;
 use crate::services::treasury_long::{fetch_20y_bond_yield, fetch_20y_tips_yield};
-use log::{error, info};
+use log::{error, info, debug};
 use chrono::{Duration, Utc};
+use serde_json::json;
 
-#[derive(Serialize)]
-struct LongTermRatesResponse {
-    bond_yield: f64,
-    tips_yield: f64,
-    real_tbill: f64,
-}
-
-pub async fn get_long_term_rates(db: Arc<DbStore>) -> Result<Json, Rejection> {
+pub async fn get_long_term_rates(db: Arc<DbStore>) -> Result<impl warp::Reply, Rejection> {
     info!("Handling request to get long-term rates");
 
-    let mut cache = db.get_market_cache().await.map_err(|e| {
-        error!("Database error: {}", e);
-        warp::reject::custom(ApiError::database_error(e.to_string()))
-    })?;
+    debug!("Attempting to get market cache");
+    let mut cache = match db.get_market_cache().await {
+        Ok(cache) => {
+            debug!("Successfully retrieved market cache");
+            cache
+        },
+        Err(e) => {
+            error!("Failed to get market cache: {:?}", e);
+            return Err(warp::reject::custom(ApiError::database_error(e.to_string())));
+        }
+    };
 
+    debug!("Current treasury cache timestamp: {:?}", cache.timestamps.treasury_data);
     if cache.timestamps.treasury_data < Utc::now() - Duration::hours(1) {
         info!("Cache expired, fetching new treasury data");
         
@@ -31,6 +32,7 @@ pub async fn get_long_term_rates(db: Arc<DbStore>) -> Result<Json, Rejection> {
         
         match fetch_20y_bond_yield().await {
             Ok(rate) => {
+                debug!("Successfully fetched new 20y bond yield: {}", rate);
                 cache.bond_yield_20y = rate;
             }
             Err(e) => {
@@ -43,6 +45,7 @@ pub async fn get_long_term_rates(db: Arc<DbStore>) -> Result<Json, Rejection> {
 
         match fetch_20y_tips_yield().await {
             Ok(rate) => {
+                debug!("Successfully fetched new 20y TIPS yield: {}", rate);
                 cache.tips_yield_20y = rate;
             }
             Err(e) => {
@@ -76,11 +79,21 @@ pub async fn get_long_term_rates(db: Arc<DbStore>) -> Result<Json, Rejection> {
         0.0 // Or another suitable default/fallback value
     };
 
-    let response = LongTermRatesResponse {
-        bond_yield: cache.bond_yield_20y,
-        tips_yield: cache.tips_yield_20y,
-        real_tbill,
-    };
-
-    Ok(warp::reply::json(&response))
+    debug!("Returning long-term rates: bond={}, tips={}, real_tbill={}", 
+           cache.bond_yield_20y, cache.tips_yield_20y, real_tbill);
+           
+    Ok(with_status(
+        warp::reply::json(&json!({
+            "rates": {
+                "bond_yield_20y": cache.bond_yield_20y,
+                "tips_yield_20y": cache.tips_yield_20y,
+                "real_tbill": real_tbill
+            },
+            "timestamps": {
+                "treasury": cache.timestamps.treasury_data,
+                "bls": cache.timestamps.bls_data
+            }
+        })),
+        warp::http::StatusCode::OK
+    ))
 }
