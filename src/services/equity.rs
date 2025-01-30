@@ -15,12 +15,18 @@ use crate::models::HistoricalRecord;
 use super::db::DbStore;
 
 #[derive(Debug, Serialize)]
+pub struct QuarterlyValue {
+    pub final_quarter: String,
+    pub value: f64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct MarketData {
     pub daily_close_sp500_price: f64,
     pub current_sp500_price: f64,
-    pub quarterly_dividends: HashMap<String, f64>,
-    pub eps_actual: HashMap<String, f64>,
-    pub eps_estimated: HashMap<String, f64>,
+    pub ttm_dividend: Option<QuarterlyValue>,
+    pub latest_eps_actual: Option<QuarterlyValue>,
+    pub estimated_eps_sum: Option<QuarterlyValue>,
     pub cape: f64,
     pub cape_period: String,
     pub last_update: DateTime<Utc>
@@ -34,11 +40,106 @@ struct YChartsData {
     cape: (f64, String), // (value, period)
 }
 
+async fn get_quarterly_calculations(db: &Arc<DbStore>) -> Result<(Option<QuarterlyValue>, Option<QuarterlyValue>, Option<QuarterlyValue>), Box<dyn Error>> {
+    let quarterly_data = db.sheets_store.get_quarterly_data().await?;
+    
+    // Sort quarters in descending order (most recent first)
+    let mut sorted_data = quarterly_data.clone();
+    sorted_data.sort_by(|a, b| {
+        let parse_quarter = |q: &str| {
+            let year: i32 = q[..4].parse().unwrap_or(0);
+            let quarter: i32 = q[5..].parse().unwrap_or(0);
+            (year, quarter)
+        };
+        let (year_b, q_b) = parse_quarter(&b.quarter);
+        let (year_a, q_a) = parse_quarter(&a.quarter);
+        (year_a, q_a).cmp(&(year_b, q_b))
+    });
+
+    // Calculate TTM dividend (sum of most recent 4 quarters)
+    let ttm_dividend = {
+        let mut quarters_found = 0;
+        let mut sum = 0.0;
+        let mut final_quarter = None;
+
+        for record in sorted_data.iter().rev() {
+            if let Some(dividend) = record.dividend {
+                if quarters_found == 0 {
+                    final_quarter = Some(record.quarter.clone());
+                }
+                sum += dividend;
+                quarters_found += 1;
+                if quarters_found == 4 {
+                    break;
+                }
+            }
+        }
+
+        if quarters_found == 4 {
+            Some(QuarterlyValue {
+                final_quarter: final_quarter.unwrap(),
+                value: sum,
+            })
+        } else {
+            None
+        }
+    };
+
+    // Get latest actual EPS
+    let latest_eps_actual = sorted_data.iter().rev()
+        .find(|q| q.eps_actual.is_some())
+        .map(|q| QuarterlyValue {
+            final_quarter: q.quarter.clone(),
+            value: q.eps_actual.unwrap()
+        });
+
+    // Calculate sum of next 4 quarters of estimated EPS
+    let estimated_eps_sum = {
+        let mut quarters_found = 0;
+        let mut sum = 0.0;
+        let mut final_quarter = None;
+
+        // Find first quarter with estimate
+        if let Some(start_idx) = sorted_data.iter()
+            .position(|q| q.eps_estimated.is_some()) {
+                
+            let mut consecutive_quarters = true;
+            let mut current_idx = start_idx;
+            
+            while current_idx < sorted_data.len() && quarters_found < 4 {
+                if let Some(eps) = sorted_data[current_idx].eps_estimated {
+                    if quarters_found == 0 {
+                        final_quarter = Some(sorted_data[current_idx + 3].quarter.clone());
+                    }
+                    sum += eps;
+                    quarters_found += 1;
+                } else {
+                    consecutive_quarters = false;
+                    break;
+                }
+                current_idx += 1;
+            }
+
+            if quarters_found == 4 && consecutive_quarters {
+                Some(QuarterlyValue {
+                    final_quarter: final_quarter.unwrap(),
+                    value: sum,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    Ok((ttm_dividend, latest_eps_actual, estimated_eps_sum))
+}
 pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Error>> {
     let mut cache = db.get_market_cache().await?;
     let mut data_updated = false;
 
-    // Force initial fetch if current_sp500_price is 0.0 (default)
+    // Existing price update logic...
     if cache.current_sp500_price == 0.0 {
         info!("Initial fetch of current S&P 500 price");
         if let Ok(price) = fetch_sp500_price().await {
@@ -48,7 +149,6 @@ pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Er
         }
     }
 
-    // 15-Minute Update Check for Current Price
     if cache.timestamps.yahoo_price < Utc::now() - Duration::minutes(15) {
         info!("Updating current S&P 500 price (15-minute interval)");
         if let Ok(price) = fetch_sp500_price().await {
@@ -58,12 +158,11 @@ pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Er
         }
     }
 
-    // Daily Update Check (3:30 PM Central)
     if should_update_daily() {
         info!("Market close time - performing daily updates");
         if let Ok(price) = fetch_sp500_price().await {
-            cache.daily_close_sp500_price = price; // Update daily close
-            cache.current_sp500_price = price; // Also update current (it's the same at market close)
+            cache.daily_close_sp500_price = price;
+            cache.current_sp500_price = price;
             data_updated = true;
         }
 
@@ -79,16 +178,19 @@ pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Er
         db.update_market_cache(&cache).await?;
         check_historical_updates(db, &cache).await?;
     }
+
+    // Get latest quarterly data
+    let (ttm_dividend, latest_eps_actual, estimated_eps_sum) = get_quarterly_calculations(db).await?;
     
     Ok(MarketData {
         daily_close_sp500_price: cache.daily_close_sp500_price,
         current_sp500_price: cache.current_sp500_price,
-        quarterly_dividends: cache.quarterly_dividends.clone(),
-        eps_actual: cache.eps_actual.clone(),
-        eps_estimated: cache.eps_estimated.clone(),
+        ttm_dividend,
+        latest_eps_actual,
+        estimated_eps_sum,
         cape: cache.current_cape,
         cape_period: cache.cape_period.clone(),
-        last_update: cache.timestamps.ycharts_data, // You might want to adjust which timestamp to return
+        last_update: cache.timestamps.ycharts_data,
     })
 }
 

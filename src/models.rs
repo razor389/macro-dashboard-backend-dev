@@ -34,7 +34,7 @@ pub struct HistoricalRecord {
     pub cumulative_return: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct QuarterlyData {
     pub quarter: String,
     pub dividend: Option<f64>,

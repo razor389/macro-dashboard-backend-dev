@@ -7,7 +7,7 @@ use crate::services::sheets::{SheetsStore, SheetsConfig, RawMarketCache};
 use crate::models::{MarketCache, Timestamps, HistoricalRecord};
 
 pub struct DbStore {
-    sheets_store: SheetsStore,
+    pub sheets_store: SheetsStore,
 }
 
 impl DbStore {
