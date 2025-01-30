@@ -1,7 +1,6 @@
 // src/services/calculations.rs
-
 use serde::Serialize;
-
+use log::warn;
 use crate::models::HistoricalRecord;
 use std::error::Error;
 
@@ -20,20 +19,21 @@ pub struct MarketMetrics {
 
 fn calculate_cagr(start_value: f64, end_value: f64, years: f64) -> f64 {
     if start_value <= 0.0 || end_value <= 0.0 || years <= 0.0 {
-        return 0.0;
+        0.0
+    } else {
+        (end_value / start_value).powf(1.0 / years) - 1.0
     }
-    (end_value / start_value).powf(1.0 / years) - 1.0
 }
 
 fn calculate_average(values: &[f64]) -> f64 {
     if values.is_empty() {
-        return 0.0;
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
     }
-    values.iter().sum::<f64>() / values.len() as f64
 }
 
 pub fn calculate_market_metrics(historical_data: &[HistoricalRecord]) -> Result<MarketMetrics, Box<dyn Error>> {
-    // Sort data by year to ensure proper ordering
     let mut sorted_data = historical_data.to_vec();
     sorted_data.sort_by_key(|r| r.year);
 
@@ -44,56 +44,58 @@ pub fn calculate_market_metrics(historical_data: &[HistoricalRecord]) -> Result<
         .collect();
     let avg_dividend_yield = calculate_average(&dividend_yields);
 
-    // Get the most recent year's data
-    let current_year = sorted_data.last()
-        .ok_or("No historical data available")?
-        .year;
+    // Helper to compute CAGRs for a metric with validation and logging
+    fn compute_cagrs(
+        data: &[HistoricalRecord],
+        metric_extractor: fn(&HistoricalRecord) -> f64,
+        metric_name: &'static str,
+    ) -> (f64, f64) {
+        let valid_entries: Vec<&HistoricalRecord> = data.iter()
+            .filter(|r| metric_extractor(r) > 0.0)
+            .collect();
+    
+        let (past_cagr, current_cagr) = if valid_entries.len() < 2 {
+            warn!("Insufficient valid {} data points ({}) for CAGR calculation", metric_name, valid_entries.len());
+            (0.0, 0.0)
+        } else {
+            // Calculate past CAGR (full period)
+            let first = valid_entries.first().unwrap();
+            let last = valid_entries.last().unwrap();
+            let past_years = (last.year - first.year) as f64;
+            let past_cagr = calculate_cagr(metric_extractor(first), metric_extractor(last), past_years);
+    
+            // Calculate current CAGR (10-year window)
+            let target_start_year = last.year - 10; // Use the last valid entry's year -10
+            let start = valid_entries.iter()
+                .take_while(|r| r.year <= target_start_year)
+                .last();
+    
+            let current_cagr = match start {
+                Some(start_entry) => {
+                    let years = (last.year - start_entry.year) as f64;
+                    calculate_cagr(metric_extractor(start_entry), metric_extractor(last), years)
+                }
+                None => {
+                    warn!("No valid {} start point found for 10-year CAGR calculation", metric_name);
+                    0.0
+                }
+            };
+    
+            (past_cagr, current_cagr)
+        };
+    
+        (past_cagr, current_cagr)
+    }
 
-    // Find data for 10 years ago
-    let ten_years_ago = current_year - 10;
-    let ten_year_data = sorted_data.iter()
-        .find(|r| r.year == ten_years_ago)
-        .ok_or("10-year historical data not available")?;
-
-    // Calculate past and current inflation CAGR
-    let first_inflation = sorted_data.first()
-        .ok_or("No historical data available")?
-        .inflation;
-    let current_inflation = sorted_data.last()
-        .ok_or("No current data available")?
-        .inflation;
-    let ten_year_ago_inflation = ten_year_data.inflation;
-
-    let inflation_years = (current_year - sorted_data[0].year) as f64;
-    let past_inflation_cagr = calculate_cagr(first_inflation, current_inflation, inflation_years);
-    let current_inflation_cagr = calculate_cagr(ten_year_ago_inflation, current_inflation, 10.0);
-
-    // Calculate earnings growth CAGR
-    let first_earnings = sorted_data.first().unwrap().eps;
-    let current_earnings = sorted_data.last().unwrap().eps;
-    let ten_year_ago_earnings = ten_year_data.eps;
-
-    let earnings_years = (current_year - sorted_data[0].year) as f64;
-    let past_earnings_cagr = calculate_cagr(first_earnings, current_earnings, earnings_years);
-    let current_earnings_cagr = calculate_cagr(ten_year_ago_earnings, current_earnings, 10.0);
-
-    // Calculate CAPE CAGR
-    let first_cape = sorted_data.first().unwrap().cape;
-    let current_cape = sorted_data.last().unwrap().cape;
-    let ten_year_ago_cape = ten_year_data.cape;
-
-    let cape_years = (current_year - sorted_data[0].year) as f64;
-    let past_cape_cagr = calculate_cagr(first_cape, current_cape, cape_years);
-    let current_cape_cagr = calculate_cagr(ten_year_ago_cape, current_cape, 10.0);
-
-    // Calculate returns CAGR
-    let first_return = sorted_data.first().unwrap().cumulative_return;
-    let current_return = sorted_data.last().unwrap().cumulative_return;
-    let ten_year_ago_return = ten_year_data.cumulative_return;
-
-    let return_years = (current_year - sorted_data[0].year) as f64;
-    let past_returns_cagr = calculate_cagr(first_return, current_return, return_years);
-    let current_returns_cagr = calculate_cagr(ten_year_ago_return, current_return, 10.0);
+    // Calculate metrics for each category
+    let (past_inflation_cagr, current_inflation_cagr) = 
+        compute_cagrs(&sorted_data, |r| r.inflation, "inflation");
+    let (past_earnings_cagr, current_earnings_cagr) = 
+        compute_cagrs(&sorted_data, |r| r.eps, "earnings");
+    let (past_cape_cagr, current_cape_cagr) = 
+        compute_cagrs(&sorted_data, |r| r.cape, "CAPE");
+    let (past_returns_cagr, current_returns_cagr) = 
+        compute_cagrs(&sorted_data, |r| r.cumulative_return, "returns");
 
     Ok(MarketMetrics {
         avg_dividend_yield,
