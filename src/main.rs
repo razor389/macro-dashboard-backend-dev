@@ -5,6 +5,7 @@ use dotenv::dotenv;
 use env_logger;
 use log::{info, warn, error};
 use std::env;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use warp::Filter;
@@ -20,7 +21,16 @@ async fn main() {
     dotenv().ok();
     env_logger::init();
     info!("Logger initialized. Starting the application...");
+    //remove following block if testing locally
+    if let Ok(json_str) = std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON") {
+        // Choose a path that won't conflict with anything else:
+        let path = "/tmp/service_account.json";
+        fs::write(path, json_str).expect("Failed to write service account JSON");
 
+        // Then tell your code that the service account file is at "/tmp/service_account.json"
+        // e.g. re-export it as an env var:
+        std::env::set_var("SERVICE_ACCOUNT_JSON", path);
+    }
     // Initialize Google Sheets connection
     let spreadsheet_id = env::var("GOOGLE_SHEETS_ID")
         .expect("GOOGLE_SHEETS_ID must be set");
