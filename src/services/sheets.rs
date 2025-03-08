@@ -1,12 +1,12 @@
 // src/services/sheets.rs
 
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 use crate::{models::{MonthlyData, QuarterlyData}, services::google_oauth::fetch_access_token_from_file};
 use log::info;
 use serde_json::json;
 use reqwest::Client;
 use crate::models::HistoricalRecord;
+use anyhow::Result;
 
 #[derive(Clone)]
 pub struct SheetsConfig {
@@ -65,11 +65,11 @@ impl SheetsStore {
         }
     }
 
-    pub async fn get_auth_token(&self) -> Result<String, Box<dyn Error>> {
+    pub async fn get_auth_token(&self) -> Result<String> {
         crate::services::google_oauth::fetch_access_token_from_file(&self.config.service_account_json_path).await
     }
 
-    pub async fn bulk_upload_historical_records(&self, records: &[HistoricalRecord]) -> Result<(), Box<dyn Error>> {
+    pub async fn bulk_upload_historical_records(&self, records: &[HistoricalRecord]) -> Result<()> {
         let token = self.get_auth_token().await?;
         let client = reqwest::Client::new();
         
@@ -109,15 +109,15 @@ impl SheetsStore {
             .send()
             .await?;
     
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Failed to upload historical records: {}", error_text).into());
-        }
+            if !response.status().is_success() {
+                let error_text = response.text().await?;
+                return Err(anyhow::anyhow!("Failed to upload historical records: {}", error_text));
+            }
     
         Ok(())
     }    
 
-    pub async fn get_market_cache(&self) -> Result<RawMarketCache, Box<dyn Error>> {
+    pub async fn get_market_cache(&self) -> Result<RawMarketCache> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
     
         // Update range to include new columns
@@ -157,10 +157,10 @@ impl SheetsStore {
             }
         }
     
-        Err("No market cache data found".into())
+        Err(anyhow::anyhow!("No market cache data found"))
     }    
 
-    pub async fn update_market_cache(&self, cache: &RawMarketCache) -> Result<(), Box<dyn Error>> {
+    pub async fn update_market_cache(&self, cache: &RawMarketCache) -> Result<()> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
     
         let range = format!("{}!A2:N2", self.sheet_names.market_cache);
@@ -202,7 +202,7 @@ impl SheetsStore {
     }
 
     /// Example of reading from "QuarterlyData!A2:D" range
-    pub async fn get_quarterly_data(&self) -> Result<Vec<QuarterlyData>, Box<dyn Error>> {
+    pub async fn get_quarterly_data(&self) -> Result<Vec<QuarterlyData>> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
 
         let range = format!("{}!A2:D", self.sheet_names.quarterly_data);
@@ -239,7 +239,7 @@ impl SheetsStore {
         Ok(quarterly_data)
     }
 
-    pub async fn update_quarterly_data(&self, data: &[QuarterlyData]) -> Result<(), Box<dyn Error>> {
+    pub async fn update_quarterly_data(&self, data: &[QuarterlyData]) -> Result<()> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
 
         let range = format!("{}!A2:D{}", self.sheet_names.quarterly_data, data.len() + 1);
@@ -273,7 +273,7 @@ impl SheetsStore {
         Ok(())
     }
 
-    pub async fn get_monthly_data(&self) -> Result<Vec<MonthlyData>, Box<dyn Error>> {
+    pub async fn get_monthly_data(&self) -> Result<Vec<MonthlyData>> {
         let token = self.get_auth_token().await?;
         let range = format!("{}!A2:B", "MonthlyData");
         let url = format!(
@@ -308,7 +308,7 @@ impl SheetsStore {
         Ok(monthly_data)
     }
 
-    pub async fn update_monthly_data(&self, data: &[MonthlyData]) -> Result<(), Box<dyn Error>> {
+    pub async fn update_monthly_data(&self, data: &[MonthlyData]) -> Result<()> {
         let token = self.get_auth_token().await?;
         let range = format!("{}!A2:B{}", "MonthlyData", data.len() + 1);
         let url = format!(
@@ -338,7 +338,7 @@ impl SheetsStore {
         Ok(())
     }
 
-    pub async fn get_historical_data(&self) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {
+    pub async fn get_historical_data(&self) -> Result<Vec<HistoricalRecord>> {
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
     
         let range = format!("{}!A2:I", self.sheet_names.historical_data);
@@ -385,10 +385,10 @@ impl SheetsStore {
         Ok(historical_data)
     }
 
-    pub async fn update_historical_record(&self, record: &HistoricalRecord) -> Result<(), Box<dyn Error>> {
+    pub async fn update_historical_record(&self, record: &HistoricalRecord) -> Result<()> {
         let all_records = self.get_historical_data().await?;
         let row_index = all_records.iter().position(|r| r.year == record.year)
-            .ok_or("Record not found")?;
+            .ok_or(anyhow::anyhow!("Record not found"))?;
     
         let token = fetch_access_token_from_file(&self.config.service_account_json_path).await?;
     

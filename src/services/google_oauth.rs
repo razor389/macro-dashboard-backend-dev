@@ -2,8 +2,8 @@
 use chrono::{Utc, Duration};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 use reqwest::Client;
+use anyhow::Result;
 
 /// This matches the format of your JSON service account file
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,7 +34,7 @@ struct Claims {
 /// Load the service account JSON from a file and request a Bearer token
 pub async fn fetch_access_token_from_file(
     service_account_json_path: &str,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String> {
     // 1. Read the JSON file
     let json_bytes = std::fs::read(service_account_json_path)?;
     let key: ServiceAccountKey = serde_json::from_slice(&json_bytes)?;

@@ -1,10 +1,10 @@
 // src/services/db.rs
 
-use std::error::Error;
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use crate::services::sheets::{SheetsStore, SheetsConfig, RawMarketCache};
 use crate::models::{MarketCache, Timestamps, HistoricalRecord};
+use anyhow::Result;
 
 pub struct DbStore {
     pub sheets_store: SheetsStore,
@@ -14,7 +14,7 @@ impl DbStore {
     pub async fn new(
         spreadsheet_id: &str,
         service_account_json_path: &str
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self> {
         let config = SheetsConfig {
             spreadsheet_id: spreadsheet_id.to_string(),
             service_account_json_path: service_account_json_path.to_string(),
@@ -27,7 +27,7 @@ impl DbStore {
         })
     }
 
-    pub async fn get_market_cache(&self) -> Result<MarketCache, Box<dyn Error>> {
+    pub async fn get_market_cache(&self) -> Result<MarketCache> {
         let raw_cache: RawMarketCache = self.sheets_store.get_market_cache().await?;
 
         Ok(MarketCache {
@@ -53,7 +53,7 @@ impl DbStore {
         })
     }
 
-    pub async fn update_market_cache(&self, cache: &MarketCache) -> Result<(), Box<dyn Error>> {
+    pub async fn update_market_cache(&self, cache: &MarketCache) -> Result<()> {
         let raw_cache = RawMarketCache {
             timestamp_yahoo: cache.timestamps.yahoo_price.to_rfc3339(),
             timestamp_ycharts: cache.timestamps.ycharts_data.to_rfc3339(),
@@ -75,16 +75,16 @@ impl DbStore {
         Ok(())
     }
 
-    pub async fn get_historical_data(&self) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {
+    pub async fn get_historical_data(&self) -> Result<Vec<HistoricalRecord>> {
         self.sheets_store.get_historical_data().await
     }
 
-    pub async fn get_historical_year(&self, year: i32) -> Result<Option<HistoricalRecord>, Box<dyn Error>> {
+    pub async fn get_historical_year(&self, year: i32) -> Result<Option<HistoricalRecord>> {
         let records = self.sheets_store.get_historical_data().await?;
         Ok(records.into_iter().find(|r| r.year == year))
     }
 
-    pub async fn update_historical_record(&self, record: HistoricalRecord) -> Result<(), Box<dyn Error>> {
+    pub async fn update_historical_record(&self, record: HistoricalRecord) -> Result<()> {
         self.sheets_store.update_historical_record(&record).await
     }
 }

@@ -2,15 +2,15 @@
 use reqwest::{self, Client};
 use scraper::{Html, Selector};
 use serde::Serialize;
-use std::error::Error;
-use log::{error, info};
+use log::{error,info};
 use regex::Regex;
 use chrono::{DateTime, Utc, NaiveTime, Datelike, Duration};
 use std::collections::HashMap;
 use std::sync::Arc;
 use chrono_tz::US::Central;
+use anyhow::Result;
 
-use crate::models::{HistoricalRecord, MonthlyData};
+use crate::models::{HistoricalRecord, MonthlyData, QuarterlyData};
 
 use super::{calculations::{calculate_market_metrics, MarketMetrics}, db::DbStore};
 
@@ -41,7 +41,7 @@ struct YChartsData {
     monthly_return: Option<(String, f64)>, // (period, value)
 }
 
-async fn get_quarterly_calculations(db: &Arc<DbStore>) -> Result<(Option<QuarterlyValue>, Option<QuarterlyValue>, Option<QuarterlyValue>), Box<dyn Error>> {
+async fn get_quarterly_calculations(db: &Arc<DbStore>) -> Result<(Option<QuarterlyValue>, Option<QuarterlyValue>, Option<QuarterlyValue>)> {
     let quarterly_data = db.sheets_store.get_quarterly_data().await?;
     
     // Sort quarters in descending order (most recent first)
@@ -137,7 +137,7 @@ async fn get_quarterly_calculations(db: &Arc<DbStore>) -> Result<(Option<Quarter
     Ok((ttm_dividend, latest_eps_actual, estimated_eps_sum))
 }
 
-pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Error>> {
+pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData> {
     let mut cache = db.get_market_cache().await?;
     let mut data_updated = false;
 
@@ -169,6 +169,35 @@ pub async fn get_market_data(db: &Arc<DbStore>) -> Result<MarketData, Box<dyn Er
         }
 
         if let Ok(ycharts_data) = fetch_ycharts_data().await {
+            // Check if we got a new monthly return
+            if let Some((month, return_value)) = &ycharts_data.monthly_return {
+                // Update the monthly data sheet if it's a new month
+                if let Err(e) = update_monthly_data(db, month, *return_value).await {
+                    error!("Failed to update monthly data sheet: {}", e);
+                }
+            }
+            
+            // Update quarterly dividend data
+            if !ycharts_data.quarterly_dividends.is_empty() {
+                if let Err(e) = update_quarterly_data(db, &ycharts_data.quarterly_dividends, "dividend").await {
+                    error!("Failed to update quarterly dividend data: {}", e);
+                }
+            }
+            
+            // Update quarterly EPS actual data
+            if !ycharts_data.eps_actual.is_empty() {
+                if let Err(e) = update_quarterly_data(db, &ycharts_data.eps_actual, "eps_actual").await {
+                    error!("Failed to update quarterly EPS actual data: {}", e);
+                }
+            }
+            
+            // Update quarterly EPS estimated data
+            if !ycharts_data.eps_estimated.is_empty() {
+                if let Err(e) = update_quarterly_data(db, &ycharts_data.eps_estimated, "eps_estimated").await {
+                    error!("Failed to update quarterly EPS estimated data: {}", e);
+                }
+            }
+            
             update_cache_from_ycharts(&mut cache, ycharts_data);
             cache.timestamps.ycharts_data = Utc::now();
             data_updated = true;
@@ -204,7 +233,7 @@ fn should_update_daily() -> bool {
     current_time < target_time + chrono::Duration::minutes(1)
 }
 
-async fn fetch_sp500_price() -> Result<f64, Box<dyn Error>> {
+async fn fetch_sp500_price() -> Result<f64> {
     let url = "https://finance.yahoo.com/quote/%5EGSPC";
     let client = Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
@@ -215,12 +244,12 @@ async fn fetch_sp500_price() -> Result<f64, Box<dyn Error>> {
     let price = re.captures(&resp)
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str().parse::<f64>())
-        .ok_or("Price not found")??;
+        .ok_or_else(|| anyhow::anyhow!("Price not found"))??;
 
     Ok(price)
 }
 
-async fn fetch_ycharts_value(url: &str) -> Result<(String, f64), Box<dyn Error>> {
+async fn fetch_ycharts_value(url: &str) -> Result<(String, f64)> {
     info!("Fetching data from URL: {}", url);
     
     let client = reqwest::Client::new();
@@ -238,31 +267,96 @@ async fn fetch_ycharts_value(url: &str) -> Result<(String, f64), Box<dyn Error>>
     let stat = document.select(&value_selector)
         .next()
         .and_then(|el| el.text().next())
-        .ok_or_else(|| "Failed to find stat")?
+        .ok_or_else(||anyhow::anyhow!("Failed to find stat"))?
         .trim();
     
     info!("Found stat text: {}", stat);
 
-    let re = Regex::new(r"([-+]?\d*\.?\d+)\s*(?:USD)?\s*(?:for\s+)?(?:Q\d\s+\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})")?;
+    // IMPROVED REGEX - handles the current YCharts format better
+    let re = Regex::new(r"([-+]?\d*\.?\d+)%?\s*(?:USD)?\s*(?:for)?\s+(?:(Q\d)\s+(\d{4})|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4}))")?;
     
-    let (value, period_text) = match re.captures(stat) {
-        Some(caps) => {
-            let value_str = caps.get(1).ok_or("No value match")?.as_str();
-            let full_match = caps.get(0).ok_or("No full match")?.as_str();
-            let period_part = full_match.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
-            info!("Parsed value: {}, period text: {}", value_str, period_part);
-            (value_str.parse::<f64>()?, period_part)
-        },
-        None => {
-            error!("Failed to parse value and period from stat: {}", stat);
-            return Err("Failed to parse value and period".into())
-        }
-    };
-
-    Ok((period_text.to_string(), value))
+    if let Some(caps) = re.captures(stat) {
+        let value_str = caps.get(1).ok_or(anyhow::anyhow!("No value match"))?.as_str();
+        let value = value_str.parse::<f64>()?;
+        
+        let period_text = if let Some(quarter) = caps.get(2) {
+            // It's quarterly data: Q1 2024 format
+            let year = caps.get(3).unwrap().as_str();
+            format!("{}{}", year, quarter.as_str())
+        } else {
+            // It's monthly data: Jan 2024 format
+            let month = caps.get(4).unwrap().as_str();
+            let year = caps.get(5).unwrap().as_str();
+            
+            // Convert month name to number
+            let month_num = match month {
+                "Jan" => "01", "Feb" => "02", "Mar" => "03", "Apr" => "04",
+                "May" => "05", "Jun" => "06", "Jul" => "07", "Aug" => "08",
+                "Sep" => "09", "Oct" => "10", "Nov" => "11", "Dec" => "12",
+                _ => "00" // shouldn't happen with the regex
+            };
+            
+            // Format as YYYY-MM for consistent sorting
+            format!("{}-{}", year, month_num)
+        };
+        
+        // Convert percentage to decimal if needed
+        let final_value = if stat.contains('%') {
+            value / 100.0
+        } else {
+            value
+        };
+        
+        return Ok((period_text, final_value));
+    }
+    
+    // If regex didn't match, try a simpler approach to at least extract the value
+    let fallback_re = Regex::new(r"([-+]?\d*\.?\d+)%?")?;
+    if let Some(caps) = fallback_re.captures(stat) {
+        let value_str = caps.get(1).ok_or(anyhow::anyhow!("No value match with fallback"))?.as_str();
+        let value = value_str.parse::<f64>()?;
+        let final_value = if stat.contains('%') {
+            value / 100.0
+        } else {
+            value
+        };
+        
+        // Try to extract period from text
+        let year_re = Regex::new(r"\b(20\d{2})\b").unwrap();
+        let period = if let Some(year_caps) = year_re.captures(stat) {
+            let year = year_caps.get(1).unwrap().as_str();
+            
+            // Look for month or quarter
+            let month_re = Regex::new(r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b").unwrap();
+            if let Some(month_caps) = month_re.captures(stat) {
+                let month = month_caps.get(1).unwrap().as_str();
+                let month_num = match month {
+                    "Jan" => "01", "Feb" => "02", "Mar" => "03", "Apr" => "04",
+                    "May" => "05", "Jun" => "06", "Jul" => "07", "Aug" => "08", 
+                    "Sep" => "09", "Oct" => "10", "Nov" => "11", "Dec" => "12",
+                    _ => "00"
+                };
+                format!("{}-{}", year, month_num)
+            } else {
+                let quarter_re = Regex::new(r"\b(Q[1-4])\b").unwrap();
+                if let Some(q_caps) = quarter_re.captures(stat) {
+                    let quarter = q_caps.get(1).unwrap().as_str();
+                    format!("{}{}", year, quarter)
+                } else {
+                    format!("{}-00", year)
+                }
+            }
+        } else {
+            "Unknown".to_string()
+        };
+        
+        return Ok((period, final_value));
+    }
+    
+    Err(anyhow::anyhow!("Failed to parse value and period"))
 }
 
-async fn fetch_ycharts_data() -> Result<YChartsData, Box<dyn Error>> {
+async fn fetch_ycharts_data() -> Result<YChartsData> {
     let mut quarterly_dividends = HashMap::new();
     let mut eps_actual = HashMap::new();
     let mut eps_estimated = HashMap::new();
@@ -271,7 +365,7 @@ async fn fetch_ycharts_data() -> Result<YChartsData, Box<dyn Error>> {
 
     // Fetch quarterly dividend
     if let Ok((quarter, value)) = fetch_ycharts_value(
-        "https://ycharts.com/indicators/sp_500_quarterly_dividend"
+        "https://ycharts.com/indicators/sp_500_dividends_per_share"
     ).await {
         quarterly_dividends.insert(quarter, value);
     }
@@ -338,7 +432,143 @@ fn update_cache_from_ycharts(cache: &mut crate::models::MarketCache, ycharts_dat
     cache.cape_period = ycharts_data.cape.1;
 }
 
-async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::MarketCache) -> Result<(), Box<dyn Error>> {
+pub async fn update_monthly_data(db: &Arc<DbStore>, month: &str, return_value: f64) ->  Result<()> {
+    info!("Updating monthly data for {}: {}", month, return_value);
+    
+    // Get existing monthly data
+    let mut monthly_data = db.sheets_store.get_monthly_data().await?;
+    
+    // Check if this month already exists
+    let month_exists = monthly_data.iter().any(|data| data.month == month);
+    
+    if !month_exists {
+        info!("Adding new month data: {} = {}", month, return_value);
+        // Add the new month
+        monthly_data.push(MonthlyData {
+            month: month.to_string(),
+            total_return: return_value,
+        });
+        
+        // Sort monthly data by date for consistency
+        monthly_data.sort_by(|a, b| a.month.cmp(&b.month));
+        
+        // Update the sheet
+        db.sheets_store.update_monthly_data(&monthly_data).await?;
+        info!("Successfully updated monthly data sheet with new month: {}", month);
+    } else {
+        info!("Month {} already exists in monthly data, skipping update", month);
+    }
+    
+    Ok(())
+}
+
+pub async fn update_quarterly_data(db: &Arc<DbStore>, quarterly_data: &HashMap<String, f64>, data_type: &str) ->  Result<()> {
+    if quarterly_data.is_empty() {
+        info!("No quarterly {} data to update", data_type);
+        return Ok(());
+    }
+
+    info!("Updating quarterly {} data with {} entries", data_type, quarterly_data.len());
+    
+    // Get existing quarterly data
+    let mut existing_data = db.sheets_store.get_quarterly_data().await?;
+    info!("Retrieved {} existing quarterly records", existing_data.len());
+    
+    let mut updates_made = false;
+    
+    // Update existing or add new quarterly data
+    for (quarter, value) in quarterly_data {
+        // Find existing entry for this quarter
+        let existing_entry = existing_data.iter_mut().find(|entry| &entry.quarter == quarter);
+        
+        match existing_entry {
+            Some(entry) => {
+                // Update the appropriate field based on data type
+                match data_type {
+                    "dividend" => {
+                        if entry.dividend.is_none() || (entry.dividend.unwrap() - *value).abs() > 0.001 {
+                            info!("Updating dividend for {} from {:?} to {}", 
+                                  quarter, entry.dividend, value);
+                            entry.dividend = Some(*value);
+                            updates_made = true;
+                        }
+                    },
+                    "eps_actual" => {
+                        if entry.eps_actual.is_none() || (entry.eps_actual.unwrap() - *value).abs() > 0.001 {
+                            info!("Updating EPS actual for {} from {:?} to {}", 
+                                  quarter, entry.eps_actual, value);
+                            entry.eps_actual = Some(*value);
+                            updates_made = true;
+                        }
+                    },
+                    "eps_estimated" => {
+                        if entry.eps_estimated.is_none() || (entry.eps_estimated.unwrap() - *value).abs() > 0.001 {
+                            info!("Updating EPS estimate for {} from {:?} to {}", 
+                                  quarter, entry.eps_estimated, value);
+                            entry.eps_estimated = Some(*value);
+                            updates_made = true;
+                        }
+                    },
+                    _ => {
+                        error!("Unknown data type: {}", data_type);
+                    }
+                }
+            },
+            None => {
+                // Create a new entry for this quarter
+                info!("Adding new {} of {} for quarter {}", data_type, value, quarter);
+                
+                let mut new_entry = QuarterlyData {
+                    quarter: quarter.clone(),
+                    dividend: None,
+                    eps_actual: None,
+                    eps_estimated: None,
+                };
+                
+                // Set the appropriate field based on data type
+                match data_type {
+                    "dividend" => new_entry.dividend = Some(*value),
+                    "eps_actual" => new_entry.eps_actual = Some(*value),
+                    "eps_estimated" => new_entry.eps_estimated = Some(*value),
+                    _ => {
+                        error!("Unknown data type: {}", data_type);
+                    }
+                }
+                
+                existing_data.push(new_entry);
+                updates_made = true;
+            }
+        }
+    }
+    
+    // If we made any updates, save the data back to the sheet
+    if updates_made {
+        info!("Saving updated quarterly data to sheet");
+        
+        // Sort the data by quarter for consistency
+        existing_data.sort_by(|a, b| {
+            // Parse quarters like "2024Q1" for proper sorting
+            let parse_quarter = |q: &str| -> (i32, i32) {
+                let year = q.get(0..4).unwrap_or("0000").parse::<i32>().unwrap_or(0);
+                let quarter = q.get(4..6).unwrap_or("0").parse::<i32>().unwrap_or(0);
+                (year, quarter)
+            };
+            
+            let a_parts = parse_quarter(&a.quarter);
+            let b_parts = parse_quarter(&b.quarter);
+            a_parts.cmp(&b_parts)
+        });
+        
+        db.sheets_store.update_quarterly_data(&existing_data).await?;
+        info!("Quarterly data successfully updated");
+    } else {
+        info!("No updates needed for quarterly data");
+    }
+    
+    Ok(())
+}
+
+async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::MarketCache) -> Result<()> {
     let current_year = Utc::now().year() as i32;
     let prev_year = current_year - 1;
     
@@ -437,12 +667,12 @@ async fn check_historical_updates(db: &Arc<DbStore>, cache: &crate::models::Mark
     Ok(())
 }
 
-pub async fn get_market_metrics(db: &Arc<DbStore>) -> Result<MarketMetrics, Box<dyn Error>> {
+pub async fn get_market_metrics(db: &Arc<DbStore>) -> Result<MarketMetrics> {
     let historical_data = db.get_historical_data().await?;
     calculate_market_metrics(&historical_data)
 }
 
-pub async fn get_historical_data(db: &Arc<DbStore>) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {
+pub async fn get_historical_data(db: &Arc<DbStore>) -> Result<Vec<HistoricalRecord>> {
     db.get_historical_data().await
 }
 
@@ -450,7 +680,7 @@ pub async fn get_historical_data_range(
     db: &Arc<DbStore>, 
     start_year: i32, 
     end_year: i32
-) -> Result<Vec<HistoricalRecord>, Box<dyn Error>> {
+) -> Result<Vec<HistoricalRecord>> {
     let all_data = db.get_historical_data().await?;
     Ok(all_data.into_iter()
         .filter(|record| record.year >= start_year && record.year <= end_year)

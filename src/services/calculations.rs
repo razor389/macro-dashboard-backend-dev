@@ -2,7 +2,7 @@
 use serde::Serialize;
 use log::warn;
 use crate::models::HistoricalRecord;
-use std::error::Error;
+use anyhow::Result;
 
 #[derive(Serialize)]
 pub struct MarketMetrics {
@@ -33,7 +33,7 @@ fn calculate_average(values: &[f64]) -> f64 {
     }
 }
 
-pub fn calculate_market_metrics(historical_data: &[HistoricalRecord]) -> Result<MarketMetrics, Box<dyn Error>> {
+pub fn calculate_market_metrics(historical_data: &[HistoricalRecord]) -> Result<MarketMetrics> {
     let mut sorted_data = historical_data.to_vec();
     sorted_data.sort_by_key(|r| r.year);
 
