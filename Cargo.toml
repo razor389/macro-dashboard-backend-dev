@@ -9,21 +9,23 @@ name = "macro_dashboard_acm"
 path = "src/lib.rs"
 
 [dependencies]
-reqwest = { version = "0.11.24", features = ["json"] }
+# Ensure reqwest is configured for rustls-tls
+reqwest = { version = "0.11.27", default-features = false, features = ["rustls-tls", "json"] } # Updated version and features
+
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full"] } # Ensure "full" or necessary async features like "macros", "rt-multi-thread"
 warp = "0.3"
-scraper = "0.13"
+scraper = "0.13" # Used in other parts of your project
 dotenv = "0.15"
-log = "0.4"
-env_logger = "0.10.2"
+log = "0.4" # Your code uses log::info, log::error
+env_logger = "0.10.2" # For initializing the logger in main
 chrono = { version = "0.4", features = ["serde"] }
-csv = "1.1"
-idna = "0.5.0"
-regex = "1.8"
-chrono-tz = "0.8"
-tokio-cron-scheduler = "0.9"
-jsonwebtoken = "9.3.0"
-base64 = "0.21.2"
-anyhow = "1.0"
+csv = "1.1" # Your code uses csv::Reader
+idna = "0.5.0" # Likely a sub-dependency, keep if present
+regex = "1.8" # Used in other parts of your project
+chrono-tz = "0.8" # Used in other parts of your project
+tokio-cron-scheduler = "0.9" # Used in other parts of your project
+jsonwebtoken = "9.3.0" # Used in other parts of your project
+base64 = "0.21.2" # Used in other parts of your project
+anyhow = "1.0" # Used in other parts of your project
