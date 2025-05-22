@@ -125,5 +125,5 @@ daily-treasury-rates.csv/{year}/all?_format=csv\
 &type=daily_treasury_real_yield_curve",
         year = year
     );
-    fetch_treasury_csv_rate_generic(&url, "20 Yr", "20-Year TIPS Yield").await
+    fetch_treasury_csv_rate_generic(&url, "20 YR", "20-Year TIPS Yield").await
 }

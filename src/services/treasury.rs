@@ -113,5 +113,5 @@ daily-treasury-rates.csv/{year}/all?_format=csv\
 &type=daily_treasury_bill_rates",
         year = year
     );
-    fetch_treasury_csv_rate_generic(&url, "4 Wk", "4-Week T-Bill Rate").await
+    fetch_treasury_csv_rate_generic(&url, "4 WEEKS COUPON EQUIVALENT", "4-Week T-Bill Rate").await
 }
