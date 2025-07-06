@@ -233,20 +233,77 @@ fn should_update_daily() -> bool {
     current_time < target_time + chrono::Duration::minutes(1)
 }
 
-async fn fetch_sp500_price() -> Result<f64> {
-    let url = "https://finance.yahoo.com/quote/%5EGSPC";
+pub async fn fetch_sp500_price() -> Result<f64> {
+    // Try Yahoo Finance API first
+    let api_url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=1d";
     let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         .build()?;
         
-    let resp = client.get(url).send().await?.text().await?;
-    let re = Regex::new(r#"data-symbol="\^GSPC"[^>]*data-value="([0-9.]+)""#)?;
-    let price = re.captures(&resp)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().parse::<f64>())
-        .ok_or_else(|| anyhow::anyhow!("Price not found"))??;
+    // First try the API endpoint
+    match client.get(api_url).send().await {
+        Ok(response) => {
+            if let Ok(text) = response.text().await {
+                let price_re = Regex::new(r#""regularMarketPrice":([0-9.]+)"#)?;
+                if let Some(caps) = price_re.captures(&text) {
+                    if let Ok(price) = caps.get(1).unwrap().as_str().parse::<f64>() {
+                        info!("Found S&P 500 price via API: {}", price);
+                        return Ok(price);
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            info!("API request failed, falling back to web scraping");
+        }
+    }
+    
+    // Fallback to web scraping
+    let url = "https://finance.yahoo.com/quote/%5EGSPC";
+    let resp = client.get(url)
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.5")
+        .header("Accept-Encoding", "gzip, deflate")
+        .header("Connection", "keep-alive")
+        .header("Upgrade-Insecure-Requests", "1")
+        .send()
+        .await?
+        .text()
+        .await?;
 
-    Ok(price)
+    // Try multiple patterns for extracting the price
+    let patterns = vec![
+        r#""regularMarketPrice":\{"raw":([0-9.]+),"fmt":"[^"]*"\}"#,
+        r#""regularMarketPrice":\{"raw":([0-9.]+)"#,
+        r#"data-symbol="\^GSPC"[^>]*data-value="([0-9.]+)""#,
+        r#"data-field="regularMarketPrice"[^>]*>([0-9,]+\.[0-9]+)"#,
+        r#"<span[^>]*data-symbol="\^GSPC"[^>]*>([0-9,]+\.[0-9]+)</span>"#,
+    ];
+    
+    for pattern in patterns {
+        let re = Regex::new(pattern)?;
+        if let Some(caps) = re.captures(&resp) {
+            let price_str = caps.get(1).unwrap().as_str().replace(",", "");
+            if let Ok(price) = price_str.parse::<f64>() {
+                info!("Found S&P 500 price: {} using pattern: {}", price, pattern);
+                return Ok(price);
+            }
+        }
+    }
+    
+    // Fallback: look for any reasonable price-like number
+    let price_re = Regex::new(r"([0-9]{4}\.[0-9]{2})")?;
+    for cap in price_re.captures_iter(&resp) {
+        let price_str = cap.get(1).unwrap().as_str();
+        if let Ok(price) = price_str.parse::<f64>() {
+            if price > 3000.0 && price < 7000.0 {
+                info!("Found S&P 500 price using fallback: {}", price);
+                return Ok(price);
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("Price not found in Yahoo Finance response"))
 }
 
 async fn fetch_ycharts_value(url: &str) -> Result<(String, f64)> {
@@ -356,7 +413,7 @@ async fn fetch_ycharts_value(url: &str) -> Result<(String, f64)> {
     Err(anyhow::anyhow!("Failed to parse value and period"))
 }
 
-async fn fetch_ycharts_data() -> Result<YChartsData> {
+pub async fn fetch_ycharts_data() -> Result<YChartsData> {
     let mut quarterly_dividends = HashMap::new();
     let mut eps_actual = HashMap::new();
     let mut eps_estimated = HashMap::new();
@@ -395,8 +452,8 @@ async fn fetch_ycharts_data() -> Result<YChartsData> {
     if let Ok((period, value)) = fetch_ycharts_value(
         "https://ycharts.com/indicators/sp_500_monthly_total_return"
     ).await {
-        // Convert percentage to decimal
-        monthly_return = Some((period, value / 100.0));
+        // Value is already converted to decimal by fetch_ycharts_value
+        monthly_return = Some((period, value));
     }
 
     Ok(YChartsData {
