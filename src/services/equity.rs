@@ -233,7 +233,7 @@ fn should_update_daily() -> bool {
     current_time < target_time + chrono::Duration::minutes(1)
 }
 
-pub async fn fetch_sp500_price() -> Result<f64> {
+async fn fetch_sp500_price() -> Result<f64> {
     // Try Yahoo Finance API first
     let api_url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=1d";
     let client = Client::builder()
@@ -413,7 +413,7 @@ async fn fetch_ycharts_value(url: &str) -> Result<(String, f64)> {
     Err(anyhow::anyhow!("Failed to parse value and period"))
 }
 
-pub async fn fetch_ycharts_data() -> Result<YChartsData> {
+async fn fetch_ycharts_data() -> Result<YChartsData> {
     let mut quarterly_dividends = HashMap::new();
     let mut eps_actual = HashMap::new();
     let mut eps_estimated = HashMap::new();
